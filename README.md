@@ -6,7 +6,8 @@ AWS infrastructure deployment for TheraPrac using Terraform and Ansible.
 
 | Phase | Directory | Description | Status |
 |-------|-----------|-------------|--------|
-| 1 | `infra/phase1-vpc` | VPC, Subnets, Route Tables | ✅ Ready |
+| 0 | `infra/phase0-bootstrap` | S3 + DynamoDB for Terraform state | 📋 Ready |
+| 1 | `infra/phase1-vpc` | VPC, Subnets, Route Tables | ✅ Deployed |
 | 2 | `infra/phase2-endpoints` | VPC Endpoints | 📋 Planned |
 | 3 | `infra/phase3-iam` | IAM Roles & Policies | 📋 Planned |
 | 4 | `infra/phase4-ziti` | Ziti Network Infrastructure | 📋 Planned |
@@ -21,8 +22,29 @@ AWS infrastructure deployment for TheraPrac using Terraform and Ansible.
 
 ## Quick Start
 
+### 1. Apply Bootstrap (Phase 0) - Remote State Setup
+
+```bash
+cd infra/phase0-bootstrap
+terraform init
+terraform plan
+terraform apply
+```
+
+### 2. Migrate Phase 1 to Remote State
+
+After bootstrap is applied, update `infra/phase1-vpc/backend.tf` to use S3 backend,
+then run:
+
 ```bash
 cd infra/phase1-vpc
+terraform init -migrate-state
+```
+
+### 3. Apply Subsequent Phases
+
+```bash
+cd infra/phase2-endpoints
 terraform init
 terraform plan
 terraform apply
@@ -30,9 +52,8 @@ terraform apply
 
 ## State Management
 
-Phase 1 uses local state. After bootstrap module is applied, migrate to S3 backend.
-
-See `infra/modules/bootstrap/` for state bucket setup.
+- **Phase 0 (Bootstrap)**: Uses local state (intentional - bootstrap cannot use its own backend)
+- **All other phases**: Use S3 backend with DynamoDB locking after bootstrap is applied
 
 ## Directory Structure
 
@@ -40,6 +61,7 @@ See `infra/modules/bootstrap/` for state bucket setup.
 theraprac-infra/
 ├── README.md
 ├── infra/
+│   ├── phase0-bootstrap/    # S3 + DynamoDB for Terraform state
 │   ├── phase1-vpc/          # VPC & network foundation
 │   ├── phase2-endpoints/    # VPC endpoints
 │   ├── phase3-iam/          # IAM roles & policies
@@ -47,6 +69,5 @@ theraprac-infra/
 │   ├── phase5-rds/          # RDS PostgreSQL
 │   ├── phase6-app/          # Application infrastructure
 │   └── modules/             # Shared Terraform modules
-│       └── bootstrap/       # State bucket & DynamoDB
 ```
 

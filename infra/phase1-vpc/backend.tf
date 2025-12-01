@@ -1,29 +1,16 @@
 # =============================================================================
-# Terraform Backend Configuration
+# Terraform Backend Configuration - S3 Remote State
 # =============================================================================
-# Phase 1: Using local state
-# After running the bootstrap module, uncomment the S3 backend below and run:
-#   terraform init -migrate-state
+# Note: Uses default credential chain (AWS_PROFILE env var or SSO session)
+# Run: export AWS_PROFILE=jfinlinson_cli before terraform commands
 # =============================================================================
 
-# Local state (current)
 terraform {
-  backend "local" {
-    path = "terraform.tfstate"
+  backend "s3" {
+    bucket         = "theraprac-tfstate-32fcc26f"
+    key            = "phase1-vpc/terraform.tfstate"
+    region         = "us-west-2"
+    encrypt        = true
+    dynamodb_table = "theraprac-terraform-locks"
   }
 }
-
-# -----------------------------------------------------------------------------
-# S3 Backend (uncomment after bootstrap)
-# -----------------------------------------------------------------------------
-# terraform {
-#   backend "s3" {
-#     bucket         = "theraprac-terraform-state"
-#     key            = "phase1-vpc/terraform.tfstate"
-#     region         = "us-west-2"
-#     profile        = "jfinlinson_cli"
-#     encrypt        = true
-#     dynamodb_table = "theraprac-terraform-locks"
-#   }
-# }
-
