@@ -1,0 +1,32 @@
+---
+# =============================================================================
+# Prerequisites Installation
+# =============================================================================
+
+- name: Update system packages
+  yum:
+    name: '*'
+    state: latest
+    update_cache: yes
+
+- name: Install required packages
+  yum:
+    name:
+      - jq
+      - curl
+      - wget
+      - unzip
+      - tar
+      - python3
+      - python3-pip
+      - openssl
+      - ca-certificates
+    state: present
+
+- name: Install Python packages for health check
+  pip:
+    name:
+      - flask
+    executable: pip3
+    state: present
+

@@ -1,0 +1,45 @@
+---
+# =============================================================================
+# Ziti Role - Main Tasks
+# =============================================================================
+
+- name: Include prerequisites
+  include_tasks: prerequisites.yml
+  tags: [prerequisites]
+
+- name: Include user setup
+  include_tasks: user.yml
+  tags: [user]
+
+- name: Include directory setup
+  include_tasks: directories.yml
+  tags: [directories]
+
+- name: Include binary installation
+  include_tasks: install.yml
+  tags: [install]
+
+- name: Include PKI generation
+  include_tasks: pki.yml
+  tags: [pki]
+
+- name: Include controller configuration
+  include_tasks: controller.yml
+  tags: [controller]
+
+- name: Include router configuration
+  include_tasks: router.yml
+  tags: [router]
+
+- name: Include health check setup
+  include_tasks: healthcheck.yml
+  tags: [healthcheck]
+
+- name: Include systemd services
+  include_tasks: services.yml
+  tags: [services]
+
+- name: Include hardening
+  include_tasks: hardening.yml
+  tags: [hardening]
+

@@ -1,0 +1,47 @@
+---
+# =============================================================================
+# Ziti Binary Installation
+# =============================================================================
+
+- name: Set architecture variable
+  set_fact:
+    ziti_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+- name: Download Ziti CLI bundle
+  get_url:
+    url: "https://github.com/openziti/ziti/releases/download/v{{ ziti_version }}/ziti-linux-{{ ziti_arch }}-{{ ziti_version }}.tar.gz"
+    dest: "/tmp/ziti-{{ ziti_version }}.tar.gz"
+    mode: '0644'
+
+- name: Extract Ziti binaries
+  unarchive:
+    src: "/tmp/ziti-{{ ziti_version }}.tar.gz"
+    dest: "{{ ziti_home }}/bin"
+    remote_src: yes
+    owner: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+    extra_opts:
+      - --strip-components=1
+
+- name: Ensure ziti binary is executable
+  file:
+    path: "{{ ziti_home }}/bin/ziti"
+    mode: '0755'
+    owner: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+
+- name: Create symlink to /usr/local/bin
+  file:
+    src: "{{ ziti_home }}/bin/ziti"
+    dest: /usr/local/bin/ziti
+    state: link
+
+- name: Verify Ziti installation
+  command: "{{ ziti_home }}/bin/ziti version"
+  register: ziti_version_check
+  changed_when: false
+
+- name: Display Ziti version
+  debug:
+    msg: "Installed Ziti version: {{ ziti_version_check.stdout }}"
+

@@ -1,0 +1,30 @@
+---
+# =============================================================================
+# Ziti Role Handlers
+# =============================================================================
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: restart ziti-controller
+  systemd:
+    name: ziti-controller
+    state: restarted
+
+- name: restart ziti-router
+  systemd:
+    name: ziti-router
+    state: restarted
+
+- name: restart sshd
+  systemd:
+    name: sshd
+    state: restarted
+
+- name: restart fail2ban
+  systemd:
+    name: fail2ban
+    state: restarted
+  ignore_errors: yes
+

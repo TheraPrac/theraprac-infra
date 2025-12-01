@@ -1,0 +1,21 @@
+---
+# =============================================================================
+# Ziti User Setup
+# =============================================================================
+
+- name: Create ziti group
+  group:
+    name: "{{ ziti_group }}"
+    state: present
+    system: yes
+
+- name: Create ziti user
+  user:
+    name: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+    system: yes
+    shell: /sbin/nologin
+    home: "{{ ziti_home }}"
+    create_home: no
+    comment: "Ziti service account"
+

@@ -1,0 +1,28 @@
+[Unit]
+Description=Ziti Health Check Server
+Documentation=https://openziti.io/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ ziti_user }}
+Group={{ ziti_group }}
+WorkingDirectory={{ ziti_home }}
+
+ExecStart=/usr/bin/python3 {{ ziti_home }}/bin/healthcheck.py
+
+Restart=always
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=append:/var/log/ziti/healthcheck.log
+StandardError=append:/var/log/ziti/healthcheck-error.log
+
+[Install]
+WantedBy=multi-user.target
+

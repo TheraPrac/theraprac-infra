@@ -1,0 +1,45 @@
+---
+# =============================================================================
+# Systemd Services Setup
+# =============================================================================
+
+- name: Create ziti-controller systemd service
+  template:
+    src: ziti-controller.service.j2
+    dest: /etc/systemd/system/ziti-controller.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd
+
+- name: Create ziti-router systemd service
+  template:
+    src: ziti-router.service.j2
+    dest: /etc/systemd/system/ziti-router.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+
+- name: Enable and start ziti-controller
+  systemd:
+    name: ziti-controller
+    enabled: yes
+    state: started
+
+- name: Wait for controller to be ready
+  wait_for:
+    host: 127.0.0.1
+    port: "{{ ziti_controller_port }}"
+    timeout: 120
+
+- name: Enable and start ziti-router
+  systemd:
+    name: ziti-router
+    enabled: yes
+    state: started
+

@@ -1,0 +1,29 @@
+---
+# =============================================================================
+# Health Check Endpoint Setup
+# =============================================================================
+
+- name: Create health check script
+  template:
+    src: healthcheck.py.j2
+    dest: "{{ ziti_home }}/bin/healthcheck.py"
+    owner: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+    mode: '0755'
+
+- name: Create health check systemd service
+  template:
+    src: ziti-healthcheck.service.j2
+    dest: /etc/systemd/system/ziti-healthcheck.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd
+
+- name: Enable and start health check service
+  systemd:
+    name: ziti-healthcheck
+    enabled: yes
+    state: started
+    daemon_reload: yes
+

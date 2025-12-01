@@ -1,0 +1,41 @@
+---
+# =============================================================================
+# Ziti Controller Configuration
+# =============================================================================
+
+- name: Create controller configuration
+  template:
+    src: controller.yaml.j2
+    dest: "{{ ziti_home }}/controller/controller.yaml"
+    owner: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+    mode: '0640'
+  notify: restart ziti-controller
+
+- name: Check if controller database exists
+  stat:
+    path: "{{ ziti_home }}/data/ctrl.db"
+  register: ctrl_db_exists
+
+- name: Initialize controller database
+  when: not ctrl_db_exists.stat.exists
+  block:
+    - name: Run controller edge init
+      command: >
+        {{ ziti_home }}/bin/ziti controller edge init
+        {{ ziti_home }}/controller/controller.yaml
+        --username admin
+        --password "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+      become_user: "{{ ziti_user }}"
+      register: controller_init
+      no_log: true
+
+    - name: Save admin password to file
+      copy:
+        content: "{{ controller_init.stdout }}"
+        dest: "{{ ziti_home }}/controller/admin-credentials.txt"
+        owner: "{{ ziti_user }}"
+        group: "{{ ziti_group }}"
+        mode: '0600'
+      when: controller_init is changed
+

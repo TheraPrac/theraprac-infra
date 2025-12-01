@@ -1,0 +1,34 @@
+---
+# =============================================================================
+# Directory Structure Setup
+# =============================================================================
+
+- name: Create Ziti directory structure
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+    mode: '0750'
+  loop:
+    - "{{ ziti_home }}"
+    - "{{ ziti_home }}/controller"
+    - "{{ ziti_home }}/router"
+    - "{{ ziti_home }}/pki"
+    - "{{ ziti_home }}/pki/root"
+    - "{{ ziti_home }}/pki/intermediate"
+    - "{{ ziti_home }}/pki/server"
+    - "{{ ziti_home }}/pki/router"
+    - "{{ ziti_home }}/data"
+    - "{{ ziti_home }}/logs"
+    - "{{ ziti_home }}/bin"
+    - "{{ ziti_home }}/enrollments"
+
+- name: Create log directory with correct permissions
+  file:
+    path: /var/log/ziti
+    state: directory
+    owner: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+    mode: '0750'
+

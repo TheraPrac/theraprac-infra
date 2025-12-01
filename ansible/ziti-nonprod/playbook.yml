@@ -1,0 +1,44 @@
+---
+# =============================================================================
+# TheraPrac Ziti Nonprod Deployment Playbook
+# =============================================================================
+# Deploys and configures Ziti controller + router on a single EC2 instance
+#
+# Usage:
+#   ansible-playbook -i inventory.yml playbook.yml
+#
+# =============================================================================
+
+- name: Deploy Ziti Controller and Router
+  hosts: ziti_nonprod
+  become: yes
+  vars:
+    ziti_version: "1.1.3"
+    ziti_home: /opt/ziti
+    ziti_user: ziti
+    ziti_group: ziti
+    ziti_domain: ziti-nonprod.theraprac.com
+    ziti_controller_port: 443
+    ziti_router_port: 6262
+    ziti_health_port: 8080
+    environment: nonprod
+
+  roles:
+    - ziti
+
+  post_tasks:
+    - name: Display deployment summary
+      debug:
+        msg: |
+          ============================================
+          Ziti Deployment Complete!
+          ============================================
+          Controller: https://{{ ziti_domain }}
+          Health Check: http://localhost:{{ ziti_health_port }}/health
+          
+          Next steps:
+          1. Wait for ALB health checks to pass
+          2. Access controller at https://{{ ziti_domain }}
+          3. Create identities with: sudo ziti edge create identity
+          ============================================
+

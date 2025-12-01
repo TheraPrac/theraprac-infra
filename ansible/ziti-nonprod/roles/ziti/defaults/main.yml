@@ -1,0 +1,15 @@
+---
+# =============================================================================
+# Ziti Role Default Variables
+# =============================================================================
+
+ziti_version: "1.1.3"
+ziti_home: /opt/ziti
+ziti_user: ziti
+ziti_group: ziti
+ziti_domain: ziti-nonprod.theraprac.com
+ziti_controller_port: 443
+ziti_router_port: 6262
+ziti_health_port: 8080
+environment: nonprod
+
