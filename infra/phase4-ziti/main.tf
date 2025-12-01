@@ -384,3 +384,51 @@ resource "aws_route53_record" "ziti" {
   }
 }
 
+# =============================================================================
+# EC2 Instance Connect Endpoint (for SSH access to private instances)
+# =============================================================================
+
+resource "aws_security_group" "eice" {
+  name        = "ec2-instance-connect-endpoint-${var.environment}"
+  description = "Security group for EC2 Instance Connect Endpoint"
+  vpc_id      = local.vpc_id
+
+  tags = {
+    Name = "eice-${var.environment}"
+  }
+}
+
+# EICE outbound to Ziti instance on SSH
+resource "aws_vpc_security_group_egress_rule" "eice_to_ziti" {
+  security_group_id            = aws_security_group.eice.id
+  description                  = "Allow SSH to Ziti instance"
+  ip_protocol                  = "tcp"
+  from_port                    = 22
+  to_port                      = 22
+  referenced_security_group_id = aws_security_group.ziti.id
+
+  tags = { Name = "eice-to-ziti-ssh" }
+}
+
+# Ziti instance inbound from EICE
+resource "aws_vpc_security_group_ingress_rule" "ziti_from_eice" {
+  security_group_id            = aws_security_group.ziti.id
+  description                  = "Allow SSH from EC2 Instance Connect Endpoint"
+  ip_protocol                  = "tcp"
+  from_port                    = 22
+  to_port                      = 22
+  referenced_security_group_id = aws_security_group.eice.id
+
+  tags = { Name = "ziti-from-eice-ssh" }
+}
+
+resource "aws_ec2_instance_connect_endpoint" "main" {
+  subnet_id          = local.ziti_subnet_id
+  security_group_ids = [aws_security_group.eice.id]
+  preserve_client_ip = false
+
+  tags = {
+    Name = "eice-${var.environment}"
+  }
+}
+

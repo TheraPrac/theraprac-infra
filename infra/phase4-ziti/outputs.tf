@@ -99,3 +99,22 @@ output "ansible_inventory_entry" {
   EOT
 }
 
+# =============================================================================
+# EC2 Instance Connect Endpoint
+# =============================================================================
+
+output "eice_id" {
+  description = "ID of the EC2 Instance Connect Endpoint"
+  value       = aws_ec2_instance_connect_endpoint.main.id
+}
+
+output "eice_dns_name" {
+  description = "DNS name of the EC2 Instance Connect Endpoint"
+  value       = aws_ec2_instance_connect_endpoint.main.dns_name
+}
+
+output "ssh_command" {
+  description = "Command to SSH into the Ziti instance via EICE"
+  value       = "aws ec2-instance-connect ssh --instance-id ${aws_instance.ziti.id} --os-user ec2-user --connection-type eice"
+}
+
