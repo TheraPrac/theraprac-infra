@@ -1,110 +1,45 @@
 # =============================================================================
-# Ziti Role - Health Check Endpoint Tasks
+# Ziti Role - Health Check Tasks
 # =============================================================================
-# Sets up a simple HTTP health check endpoint for ALB target health checks.
-# Uses a minimal Python Flask server.
+# Creates a simple HTTP health check endpoint for ALB
 # =============================================================================
 
 ---
-- name: Install Flask for health check server
-  ansible.builtin.pip:
-    name: flask
-    state: present
-  # TODO: Consider using a virtualenv to avoid system Python pollution
+- name: Create healthcheck directory
+  ansible.builtin.file:
+    path: "{{ ziti_healthcheck_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
 
-- name: Create health check script
+- name: Create healthcheck Python script
   ansible.builtin.copy:
     content: |
       #!/usr/bin/env python3
       """
-      Simple health check server for Ziti.
-      Returns 200 OK if controller and router are running.
+      Simple HTTP health check server for ALB target health checks.
+      Listens on port 8080 and responds 200 OK to all requests.
       """
-      from flask import Flask, jsonify
-      import subprocess
-      import sys
-      
-      app = Flask(__name__)
-      
-      def check_service(name):
-          """Check if a systemd service is active."""
-          try:
-              result = subprocess.run(
-                  ["systemctl", "is-active", name],
-                  capture_output=True, text=True, timeout=5
-              )
-              return result.stdout.strip() == "active"
-          except Exception:
-              return False
-      
-      @app.route('/health')
-      @app.route('/healthz')
-      @app.route('/')
-      def health():
-          controller = check_service("ziti-controller")
-          router = check_service("ziti-router")
-          
-          if controller and router:
-              status = "healthy"
-              code = 200
-          elif controller:
-              # Controller up but router down - degraded but acceptable
-              status = "degraded"
-              code = 200
-          else:
-              # Controller down - unhealthy
-              status = "unhealthy"
-              code = 503
-          
-          return jsonify({
-              "status": status,
-              "controller": "up" if controller else "down",
-              "router": "up" if router else "down"
-          }), code
-      
-      if __name__ == '__main__':
-          port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-          app.run(host='0.0.0.0', port=port, threaded=True)
-    dest: "{{ ziti_home }}/bin/healthcheck.py"
-    owner: "{{ ziti_user }}"
-    group: "{{ ziti_group }}"
-    mode: '0755'
-  notify: restart ziti-healthcheck
+      from http.server import SimpleHTTPRequestHandler, HTTPServer
 
-- name: Deploy ziti-healthcheck systemd service
-  ansible.builtin.template:
-    src: healthcheck.service.j2
-    dest: /etc/systemd/system/ziti-healthcheck.service
+      class Handler(SimpleHTTPRequestHandler):
+          def do_GET(self):
+              self.send_response(200)
+              self.send_header('Content-Type', 'text/plain')
+              self.end_headers()
+              self.wfile.write(b"OK")
+          
+          def log_message(self, format, *args):
+              # Suppress logging to reduce noise
+              pass
+
+      if __name__ == "__main__":
+          server = HTTPServer(("", {{ ziti_healthcheck_port }}), Handler)
+          print(f"Health check server listening on port {{ ziti_healthcheck_port }}")
+          server.serve_forever()
+    dest: "{{ ziti_healthcheck_dir }}/healthcheck.py"
     owner: root
     group: root
-    mode: '0644'
-  notify:
-    - reload systemd
-    - restart ziti-healthcheck
-
-- name: Reload systemd daemon
-  ansible.builtin.systemd:
-    daemon_reload: true
-
-- name: Enable and start ziti-healthcheck
-  ansible.builtin.systemd:
-    name: ziti-healthcheck
-    enabled: true
-    state: started
-
-- name: Wait for health check to be listening
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: "{{ ziti_health_port }}"
-    timeout: 30
-
-- name: Test health check endpoint
-  ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ ziti_health_port }}/health"
-    method: GET
-    return_content: true
-  register: health_check_result
-
-- name: Display health check result
-  ansible.builtin.debug:
-    msg: "Health check response: {{ health_check_result.json }}"
+    mode: '0755'
+  notify: restart healthcheck

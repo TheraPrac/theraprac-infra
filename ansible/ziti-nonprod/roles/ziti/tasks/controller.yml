@@ -1,61 +1,63 @@
 # =============================================================================
-# Ziti Role - Controller Configuration Tasks
+# Ziti Role - Controller Tasks
 # =============================================================================
-# Configures and initializes the Ziti controller.
+# Configures the Ziti controller
 # =============================================================================
 
 ---
 - name: Deploy controller configuration
   ansible.builtin.template:
     src: controller.yaml.j2
-    dest: "{{ ziti_home }}/controller/controller.yaml"
-    owner: "{{ ziti_user }}"
-    group: "{{ ziti_group }}"
+    dest: "{{ ziti_controller_dir }}/controller.yaml"
+    owner: root
+    group: root
     mode: '0640'
   notify: restart ziti-controller
-  # TODO: Validate configuration schema before deployment
 
 - name: Check if controller database exists
   ansible.builtin.stat:
-    path: "{{ ziti_home }}/data/ctrl.db"
-  register: ctrl_db_exists
+    path: "{{ ziti_controller_dir }}/ctrl.db"
+  register: controller_db_stat
 
 - name: Generate admin password
   ansible.builtin.set_fact:
-    ziti_admin_password: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=24') }}"
-  when: not ctrl_db_exists.stat.exists
-  no_log: true
+    ziti_admin_password: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=32') }}"
+  when: not controller_db_stat.stat.exists
 
-- name: Initialize controller database
+- name: Initialize controller
   ansible.builtin.command:
     cmd: >
-      {{ ziti_home }}/bin/ziti controller edge init
-      {{ ziti_home }}/controller/controller.yaml
-      --username admin
+      {{ ziti_bin }} controller edge init
+      {{ ziti_controller_dir }}/controller.yaml
+      --username {{ ziti_admin_user }}
       --password "{{ ziti_admin_password }}"
-  become_user: "{{ ziti_user }}"
-  when: not ctrl_db_exists.stat.exists
+    creates: "{{ ziti_controller_dir }}/ctrl.db"
+  when: not controller_db_stat.stat.exists
+  register: controller_init
   no_log: true
-  # TODO: Consider storing password in AWS Secrets Manager instead
 
-- name: Save admin credentials
+- name: Save admin password to file
   ansible.builtin.copy:
-    content: |
-      # Ziti Admin Credentials
-      # Generated: {{ ansible_date_time.iso8601 }}
-      # WARNING: Keep this file secure!
-      
-      Username: admin
-      Password: {{ ziti_admin_password }}
-      URL: https://{{ ziti_domain }}
-    dest: "{{ ziti_home }}/controller/admin-credentials.txt"
-    owner: "{{ ziti_user }}"
-    group: "{{ ziti_group }}"
+    content: "{{ ziti_admin_password }}"
+    dest: "{{ ziti_admin_password_file }}"
+    owner: root
+    group: root
     mode: '0600'
-  when: not ctrl_db_exists.stat.exists
+  when: controller_init is changed
   no_log: true
 
-- name: Display credential location
+- name: Read admin password from file
+  ansible.builtin.slurp:
+    src: "{{ ziti_admin_password_file }}"
+  register: admin_password_content
+  when: controller_db_stat.stat.exists
+
+- name: Set admin password fact from file
+  ansible.builtin.set_fact:
+    ziti_admin_password: "{{ admin_password_content.content | b64decode }}"
+  when: controller_db_stat.stat.exists
+  no_log: true
+
+- name: Display admin credentials location
   ansible.builtin.debug:
-    msg: "Admin credentials stored at: {{ ziti_home }}/controller/admin-credentials.txt"
-  when: not ctrl_db_exists.stat.exists
+    msg: "Admin password stored at: {{ ziti_admin_password_file }}"

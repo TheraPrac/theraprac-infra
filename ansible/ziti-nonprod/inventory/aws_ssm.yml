@@ -1,11 +1,10 @@
 # =============================================================================
-# TheraPrac Ziti Nonprod - AWS SSM Dynamic Inventory
+# TheraPrac Ziti Nonprod - AWS EC2 Dynamic Inventory
 # =============================================================================
-# This inventory uses the AWS EC2 plugin to discover instances and
-# connects via SSM (Systems Manager) instead of SSH.
+# Uses the AWS EC2 plugin to discover instances and connects via SSM.
 #
 # Prerequisites:
-#   1. Install the amazon.aws collection:
+#   1. Install amazon.aws collection:
 #      ansible-galaxy collection install amazon.aws
 #
 #   2. Install boto3:
@@ -16,52 +15,37 @@
 #
 #   4. Authenticate to AWS:
 #      aws sso login --profile jfinlinson_admin
-#
-# Usage:
-#   ansible-playbook -i inventory/aws_ssm.yml playbook.yml
 # =============================================================================
 
 plugin: amazon.aws.aws_ec2
 
-# AWS region to search
+# AWS region
 regions:
   - us-west-2
 
-# AWS profile to use (must have ec2:DescribeInstances permission)
-# TODO: Update if your profile name differs
+# AWS profile
 profile: jfinlinson_admin
 
-# Filter to find only our Ziti nonprod instance
+# Filter for Ziti instance
 filters:
-  # Match the Ansible tag we set in Terraform
-  tag:Ansible: ziti-nonprod
-  # Only running instances
+  tag:Role: ziti-server
   instance-state-name: running
 
-# Use SSM connection instead of SSH (no need for SSH keys or bastion)
-# This requires the SSM agent to be running on the instance
+# Use instance ID as hostname for SSM
 hostnames:
   - instance-id
 
-# Connection settings for all hosts
+# SSM connection settings
 compose:
   ansible_host: instance_id
   ansible_connection: aws_ssm
   ansible_aws_ssm_region: us-west-2
   ansible_aws_ssm_profile: jfinlinson_admin
-  # Use ec2-user for Amazon Linux
   ansible_user: ec2-user
 
-# Group hosts by tags for potential future use
+# Group by tags
 keyed_groups:
   - key: tags.Environment
     prefix: env
   - key: tags.Role
     prefix: role
-
-# Cache settings (optional, speeds up repeated runs)
-cache: true
-cache_plugin: jsonfile
-cache_timeout: 300
-cache_connection: /tmp/ansible_aws_ec2_cache
-

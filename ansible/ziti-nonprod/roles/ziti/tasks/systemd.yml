@@ -1,7 +1,7 @@
 # =============================================================================
-# Ziti Role - Systemd Service Tasks
+# Ziti Role - Systemd Tasks
 # =============================================================================
-# Creates and manages systemd service units for Ziti controller and router.
+# Creates and manages systemd services for Ziti
 # =============================================================================
 
 ---
@@ -27,6 +27,17 @@
     - reload systemd
     - restart ziti-router
 
+- name: Deploy healthcheck systemd service
+  ansible.builtin.template:
+    src: healthcheck.service.j2
+    dest: /etc/systemd/system/healthcheck.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart healthcheck
+
 - name: Reload systemd daemon
   ansible.builtin.systemd:
     daemon_reload: true
@@ -42,7 +53,6 @@
     host: 127.0.0.1
     port: "{{ ziti_controller_port }}"
     timeout: 60
-  # TODO: Consider more sophisticated health check
 
 - name: Enable and start ziti-router
   ansible.builtin.systemd:
@@ -50,12 +60,25 @@
     enabled: true
     state: started
 
-- name: Verify services are running
+- name: Enable and start healthcheck
+  ansible.builtin.systemd:
+    name: healthcheck
+    enabled: true
+    state: started
+
+- name: Wait for healthcheck to be listening
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ ziti_healthcheck_port }}"
+    timeout: 30
+
+- name: Verify all services are running
   ansible.builtin.systemd:
     name: "{{ item }}"
   loop:
     - ziti-controller
     - ziti-router
+    - healthcheck
   register: service_status
 
 - name: Display service status
@@ -64,4 +87,3 @@
   loop: "{{ service_status.results }}"
   loop_control:
     label: "{{ item.item }}"
-

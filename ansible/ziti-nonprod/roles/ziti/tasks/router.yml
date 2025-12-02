@@ -1,86 +1,106 @@
 # =============================================================================
-# Ziti Role - Router Configuration Tasks
+# Ziti Role - Router Tasks
 # =============================================================================
-# Configures and enrolls the Ziti edge router.
+# Configures and enrolls the Ziti router
 # =============================================================================
 
 ---
-- name: Deploy router configuration template
+- name: Deploy router configuration
   ansible.builtin.template:
     src: router.yaml.j2
-    dest: "{{ ziti_home }}/router/router.yaml"
-    owner: "{{ ziti_user }}"
-    group: "{{ ziti_group }}"
+    dest: "{{ ziti_router_dir }}/router.yaml"
+    owner: root
+    group: root
     mode: '0640'
   notify: restart ziti-router
-  # TODO: Validate configuration schema before deployment
 
 - name: Check if router is already enrolled
   ansible.builtin.stat:
-    path: "{{ ziti_home }}/router/router.cert"
-  register: router_enrolled
+    path: "{{ ziti_router_dir }}/{{ ziti_router_name }}.cert"
+  register: router_cert_stat
 
-# The following tasks create and enroll the router with the controller.
-# This requires the controller to be running.
+# The following tasks only run if router is not enrolled
+- name: Ensure controller service is started for enrollment
+  ansible.builtin.systemd:
+    name: ziti-controller
+    state: started
+    enabled: true
+  when: not router_cert_stat.stat.exists
 
 - name: Wait for controller to be ready
-  ansible.builtin.uri:
-    url: "https://localhost:{{ ziti_controller_port }}/.well-known/est/cacerts"
-    validate_certs: false
-    status_code: [200, 401, 403]
-  register: controller_ready
-  until: controller_ready.status in [200, 401, 403]
-  retries: 30
-  delay: 5
-  when: not router_enrolled.stat.exists
-  # TODO: Improve health check URL based on actual Ziti API
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ ziti_controller_port }}"
+    timeout: 120
+  when: not router_cert_stat.stat.exists
 
-- name: Read admin password from file
+- name: Read admin password for enrollment
   ansible.builtin.slurp:
-    src: "{{ ziti_home }}/controller/admin-credentials.txt"
-  register: admin_creds_file
-  when: not router_enrolled.stat.exists
+    src: "{{ ziti_admin_password_file }}"
+  register: admin_password_for_router
+  when: not router_cert_stat.stat.exists
   no_log: true
 
-- name: Parse admin password
+- name: Set admin password fact
   ansible.builtin.set_fact:
-    ziti_admin_password: "{{ admin_creds_file.content | b64decode | regex_search('Password: (.+)', '\\1') | first }}"
-  when: not router_enrolled.stat.exists
+    ziti_admin_password: "{{ admin_password_for_router.content | b64decode }}"
+  when: not router_cert_stat.stat.exists
   no_log: true
 
 - name: Login to controller
   ansible.builtin.command:
     cmd: >
-      {{ ziti_home }}/bin/ziti edge login
-      https://localhost:{{ ziti_controller_port }}
-      -u admin
-      -p "{{ ziti_admin_password }}"
+      {{ ziti_bin }} edge login
+      https://127.0.0.1:{{ ziti_controller_port }}
       --yes
-  become_user: "{{ ziti_user }}"
-  when: not router_enrolled.stat.exists
+      --username {{ ziti_admin_user }}
+      --password "{{ ziti_admin_password }}"
+  environment:
+    ZITI_CTRL_EDGE_ADVERTISED_HOST: "{{ ziti_public_endpoint }}"
+  when: not router_cert_stat.stat.exists
   no_log: true
   changed_when: true
-  # TODO: Handle login failure gracefully
+
+- name: Check if router exists in controller
+  ansible.builtin.command:
+    cmd: "{{ ziti_bin }} edge list edge-routers 'name=\"{{ ziti_router_name }}\"' --output-json"
+  register: router_list
+  when: not router_cert_stat.stat.exists
+  changed_when: false
+  failed_when: false
 
 - name: Create edge router in controller
   ansible.builtin.command:
     cmd: >
-      {{ ziti_home }}/bin/ziti edge create edge-router "router-nonprod"
-      --jwt-output-file {{ ziti_home }}/enrollments/router.jwt
+      {{ ziti_bin }} edge create edge-router {{ ziti_router_name }}
+      --jwt-output-file {{ ziti_router_dir }}/{{ ziti_router_name }}.jwt
       --tunneler-enabled
-  become_user: "{{ ziti_user }}"
-  when: not router_enrolled.stat.exists
-  register: router_create_result
-  failed_when: router_create_result.rc != 0 and 'already exists' not in router_create_result.stderr
-  changed_when: router_create_result.rc == 0
-  # TODO: Make router name configurable
+  when:
+    - not router_cert_stat.stat.exists
+    - router_list.stdout | from_json | json_query('data') | length == 0
+  register: router_create
 
-- name: Enroll router with JWT
+- name: Enroll router
   ansible.builtin.command:
     cmd: >
-      {{ ziti_home }}/bin/ziti router enroll
-      {{ ziti_home }}/router/router.yaml
-      --jwt {{ ziti_home }}/enrollments/router.jwt
-  become_user: "{{ ziti_user }}"
-  when: not router_enrolled.stat.exists
-  # TODO: Handle enrollment failure and cleanup
+      {{ ziti_bin }} router enroll
+      {{ ziti_router_dir }}/router.yaml
+      --jwt {{ ziti_router_dir }}/{{ ziti_router_name }}.jwt
+    creates: "{{ ziti_router_dir }}/{{ ziti_router_name }}.cert"
+  when: not router_cert_stat.stat.exists
+
+- name: Set router certificate permissions
+  ansible.builtin.file:
+    path: "{{ ziti_router_dir }}/{{ ziti_router_name }}.cert"
+    owner: root
+    group: root
+    mode: '0644'
+  when: router_cert_stat.stat.exists or router_create is changed
+
+- name: Set router key permissions
+  ansible.builtin.file:
+    path: "{{ ziti_router_dir }}/{{ ziti_router_name }}.key"
+    owner: root
+    group: root
+    mode: '0600'
+  failed_when: false

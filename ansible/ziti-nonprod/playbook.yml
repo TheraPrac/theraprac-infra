@@ -1,72 +1,23 @@
 # =============================================================================
 # TheraPrac Ziti Nonprod Playbook
 # =============================================================================
-# This playbook installs and configures OpenZiti controller + router
-# on the nonprod Ziti EC2 instance.
+# Installs and configures OpenZiti controller + router on the nonprod instance.
+#
+# Usage:
+#   cd ansible/ziti-nonprod
+#   ansible-playbook -i inventory/aws_ssm.yml playbook.yml
 #
 # Prerequisites:
 #   - Terraform Phase 4 must be applied (EC2 instance exists)
-#   - AWS SSM agent running on the instance
-#   - Valid AWS credentials with SSM permissions
-#
-# Usage:
-#   ansible-playbook -i inventory/aws_ssm.yml playbook.yml
-#
-# Tags:
-#   install     - Install Ziti binaries
-#   pki         - Generate PKI certificates
-#   controller  - Configure controller
-#   router      - Configure router
-#   services    - Configure systemd services
-#   healthcheck - Configure health check endpoint
+#   - AWS credentials with SSM permissions
+#   - Session Manager plugin installed
 # =============================================================================
 
 ---
-- name: Configure Ziti Controller and Router
+- name: Install and Configure Ziti
   hosts: all
   become: true
   gather_facts: true
 
-  vars:
-    # Override these in defaults/main.yml or via --extra-vars
-    ziti_environment: nonprod
-
-  pre_tasks:
-    - name: Display target host information
-      ansible.builtin.debug:
-        msg: |
-          Configuring Ziti on: {{ inventory_hostname }}
-          Environment: {{ ziti_environment }}
-          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
-          Architecture: {{ ansible_architecture }}
-
-    - name: Verify we're on Amazon Linux 2023
-      ansible.builtin.assert:
-        that:
-          - ansible_distribution == "Amazon"
-          - ansible_distribution_major_version | int >= 2023
-        fail_msg: "This playbook requires Amazon Linux 2023"
-      tags: always
-
   roles:
     - role: ziti
-      tags: [ziti]
-
-  post_tasks:
-    - name: Display completion message
-      ansible.builtin.debug:
-        msg: |
-          ============================================================
-          Ziti installation complete!
-          
-          Controller URL: https://{{ ziti_domain }}
-          Health Check:   http://localhost:{{ ziti_health_port }}/health
-          
-          Admin credentials: {{ ziti_home }}/controller/admin-credentials.txt
-          
-          To verify:
-            systemctl status ziti-controller
-            systemctl status ziti-router
-            systemctl status ziti-healthcheck
-          ============================================================
-      tags: always
