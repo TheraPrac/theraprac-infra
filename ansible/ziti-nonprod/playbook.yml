@@ -1,44 +1,72 @@
----
 # =============================================================================
-# TheraPrac Ziti Nonprod Deployment Playbook
+# TheraPrac Ziti Nonprod Playbook
 # =============================================================================
-# Deploys and configures Ziti controller + router on a single EC2 instance
+# This playbook installs and configures OpenZiti controller + router
+# on the nonprod Ziti EC2 instance.
+#
+# Prerequisites:
+#   - Terraform Phase 4 must be applied (EC2 instance exists)
+#   - AWS SSM agent running on the instance
+#   - Valid AWS credentials with SSM permissions
 #
 # Usage:
-#   ansible-playbook -i inventory.yml playbook.yml
+#   ansible-playbook -i inventory/aws_ssm.yml playbook.yml
 #
+# Tags:
+#   install     - Install Ziti binaries
+#   pki         - Generate PKI certificates
+#   controller  - Configure controller
+#   router      - Configure router
+#   services    - Configure systemd services
+#   healthcheck - Configure health check endpoint
 # =============================================================================
 
-- name: Deploy Ziti Controller and Router
-  hosts: ziti_nonprod
-  become: yes
+---
+- name: Configure Ziti Controller and Router
+  hosts: all
+  become: true
+  gather_facts: true
+
   vars:
-    ziti_version: "1.1.3"
-    ziti_home: /opt/ziti
-    ziti_user: ziti
-    ziti_group: ziti
-    ziti_domain: ziti-nonprod.theraprac.com
-    ziti_controller_port: 443
-    ziti_router_port: 6262
-    ziti_health_port: 8080
-    environment: nonprod
+    # Override these in defaults/main.yml or via --extra-vars
+    ziti_environment: nonprod
+
+  pre_tasks:
+    - name: Display target host information
+      ansible.builtin.debug:
+        msg: |
+          Configuring Ziti on: {{ inventory_hostname }}
+          Environment: {{ ziti_environment }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Architecture: {{ ansible_architecture }}
+
+    - name: Verify we're on Amazon Linux 2023
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Amazon"
+          - ansible_distribution_major_version | int >= 2023
+        fail_msg: "This playbook requires Amazon Linux 2023"
+      tags: always
 
   roles:
-    - ziti
+    - role: ziti
+      tags: [ziti]
 
   post_tasks:
-    - name: Display deployment summary
-      debug:
+    - name: Display completion message
+      ansible.builtin.debug:
         msg: |
-          ============================================
-          Ziti Deployment Complete!
-          ============================================
-          Controller: https://{{ ziti_domain }}
-          Health Check: http://localhost:{{ ziti_health_port }}/health
+          ============================================================
+          Ziti installation complete!
           
-          Next steps:
-          1. Wait for ALB health checks to pass
-          2. Access controller at https://{{ ziti_domain }}
-          3. Create identities with: sudo ziti edge create identity
-          ============================================
-
+          Controller URL: https://{{ ziti_domain }}
+          Health Check:   http://localhost:{{ ziti_health_port }}/health
+          
+          Admin credentials: {{ ziti_home }}/controller/admin-credentials.txt
+          
+          To verify:
+            systemctl status ziti-controller
+            systemctl status ziti-router
+            systemctl status ziti-healthcheck
+          ============================================================
+      tags: always

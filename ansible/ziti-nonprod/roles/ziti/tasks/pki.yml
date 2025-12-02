@@ -1,76 +1,67 @@
----
 # =============================================================================
-# PKI Generation
+# Ziti Role - PKI Generation Tasks
+# =============================================================================
+# Generates PKI certificates for Ziti controller and router.
+# Uses the Ziti CLI's built-in PKI commands.
 # =============================================================================
 
+---
 - name: Check if root CA already exists
-  stat:
-    path: "{{ ziti_home }}/pki/root/root-ca.cert"
+  ansible.builtin.stat:
+    path: "{{ ziti_pki_dir }}/root-ca/certs/root-ca.cert"
   register: root_ca_exists
 
-- name: Generate Root CA
+- name: Generate root CA
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_home }}/bin/ziti pki create ca
+      --pki-root {{ ziti_pki_dir }}
+      --ca-name root-ca
+      --ca-file root-ca
+  become_user: "{{ ziti_user }}"
   when: not root_ca_exists.stat.exists
-  block:
-    - name: Create Root CA
-      command: >
-        {{ ziti_home }}/bin/ziti pki create ca
-        --pki-root {{ ziti_home }}/pki/root
-        --ca-name root-ca
-        --ca-file root-ca
-        --trust-domain theraprac.{{ environment }}
-      become_user: "{{ ziti_user }}"
+  # TODO: Consider setting appropriate validity period
 
-- name: Check if intermediate CA exists
-  stat:
-    path: "{{ ziti_home }}/pki/intermediate/intermediate-ca.cert"
-  register: intermediate_ca_exists
-
-- name: Generate Intermediate CA
-  when: not intermediate_ca_exists.stat.exists
-  block:
-    - name: Create Intermediate CA
-      command: >
-        {{ ziti_home }}/bin/ziti pki create intermediate
-        --pki-root {{ ziti_home }}/pki/root
-        --ca-name root-ca
-        --intermediate-name intermediate-ca
-        --intermediate-file {{ ziti_home }}/pki/intermediate/intermediate-ca
-      become_user: "{{ ziti_user }}"
-
-- name: Check if server cert exists
-  stat:
-    path: "{{ ziti_home }}/pki/server/server.cert"
+- name: Check if server certificate already exists
+  ansible.builtin.stat:
+    path: "{{ ziti_pki_dir }}/root-ca/certs/server.cert"
   register: server_cert_exists
 
-- name: Generate Server Certificate
-  when: not server_cert_exists.stat.exists
-  block:
-    - name: Create Server Certificate
-      command: >
-        {{ ziti_home }}/bin/ziti pki create server
-        --pki-root {{ ziti_home }}/pki/root
-        --ca-name root-ca
-        --server-name server
-        --server-file {{ ziti_home }}/pki/server/server
-        --dns {{ ziti_domain }},localhost
-        --ip 127.0.0.1
-      become_user: "{{ ziti_user }}"
-
-- name: Create CA bundle
-  shell: |
-    cat {{ ziti_home }}/pki/root/root-ca.cert \
-        {{ ziti_home }}/pki/intermediate/intermediate-ca.cert \
-        > {{ ziti_home }}/pki/ca-bundle.cert
-  args:
-    creates: "{{ ziti_home }}/pki/ca-bundle.cert"
+- name: Generate server certificate
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_home }}/bin/ziti pki create server
+      --pki-root {{ ziti_pki_dir }}
+      --ca-name root-ca
+      --server-name server
+      --server-file server
+      --dns {{ ziti_domain }},localhost
+      --ip 127.0.0.1
   become_user: "{{ ziti_user }}"
+  when: not server_cert_exists.stat.exists
+  # TODO: Add any additional DNS names or IPs needed
 
-- name: Set strict permissions on PKI files
-  file:
-    path: "{{ ziti_home }}/pki"
+- name: Set PKI directory permissions
+  ansible.builtin.file:
+    path: "{{ ziti_pki_dir }}"
     state: directory
-    recurse: yes
     owner: "{{ ziti_user }}"
     group: "{{ ziti_group }}"
-    mode: 'u=rwX,g=rX,o='
+    mode: '0750'
+    recurse: true
 
+- name: Set private key permissions
+  ansible.builtin.shell:
+    cmd: find {{ ziti_pki_dir }} -name "*.key" -exec chmod 600 {} \;
+  changed_when: false
+  # TODO: Use ansible.builtin.find + ansible.builtin.file for idempotency
+
+- name: Display PKI structure
+  ansible.builtin.command:
+    cmd: find {{ ziti_pki_dir }} -type f -name "*.cert" -o -name "*.key"
+  register: pki_files
+  changed_when: false
+
+- name: Show generated PKI files
+  ansible.builtin.debug:
+    msg: "{{ pki_files.stdout_lines }}"

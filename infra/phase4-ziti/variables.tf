@@ -20,35 +20,41 @@ variable "environment" {
   default     = "nonprod"
 }
 
-variable "domain_name" {
-  description = "Domain name for Ziti controller"
-  type        = string
-  default     = "ziti-nonprod.theraprac.com"
-}
+# -----------------------------------------------------------------------------
+# DNS Configuration
+# -----------------------------------------------------------------------------
 
-variable "route53_zone_name" {
-  description = "Route53 hosted zone name"
+variable "route53_public_zone_name" {
+  description = "Public Route53 hosted zone name"
   type        = string
   default     = "theraprac.com"
 }
 
+variable "route53_private_zone_name" {
+  description = "Private Route53 hosted zone name for internal services"
+  type        = string
+  default     = "theraprac-internal.com"
+}
+
+variable "ziti_public_domain" {
+  description = "Public domain name for Ziti controller (ALB endpoint)"
+  type        = string
+  default     = "ziti-nonprod.theraprac.com"
+}
+
+# -----------------------------------------------------------------------------
+# EC2 Configuration
+# -----------------------------------------------------------------------------
+
 variable "instance_type" {
-  description = "EC2 instance type for Ziti"
+  description = "EC2 instance type for Ziti server (ARM-based for cost efficiency)"
   type        = string
   default     = "t4g.micro"
 }
 
-variable "ziti_version" {
-  description = "OpenZiti version to install"
-  type        = string
-  default     = "1.1.3"
-}
-
-variable "vpc_cidr" {
-  description = "VPC CIDR block"
-  type        = string
-  default     = "10.20.0.0/16"
-}
+# -----------------------------------------------------------------------------
+# Tags
+# -----------------------------------------------------------------------------
 
 variable "common_tags" {
   description = "Common tags applied to all resources"

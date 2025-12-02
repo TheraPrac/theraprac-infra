@@ -1,47 +1,101 @@
+# =============================================================================
+# Ziti Role - Installation Tasks
+# =============================================================================
+# Downloads and installs OpenZiti binaries from GitHub releases.
+# =============================================================================
+
 ---
-# =============================================================================
-# Ziti Binary Installation
-# =============================================================================
+- name: Install required packages
+  ansible.builtin.dnf:
+    name:
+      - jq
+      - wget
+      - tar
+      - openssl
+      - python3
+      - python3-pip
+    state: present
+  # TODO: Verify these packages are available on AL2023
 
-- name: Set architecture variable
-  set_fact:
-    ziti_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+- name: Create ziti system group
+  ansible.builtin.group:
+    name: "{{ ziti_group }}"
+    system: true
+    state: present
 
-- name: Download Ziti CLI bundle
-  get_url:
-    url: "https://github.com/openziti/ziti/releases/download/v{{ ziti_version }}/ziti-linux-{{ ziti_arch }}-{{ ziti_version }}.tar.gz"
-    dest: "/tmp/ziti-{{ ziti_version }}.tar.gz"
-    mode: '0644'
+- name: Create ziti system user
+  ansible.builtin.user:
+    name: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+    system: true
+    shell: /sbin/nologin
+    home: "{{ ziti_home }}"
+    create_home: false
+    state: present
 
-- name: Extract Ziti binaries
-  unarchive:
-    src: "/tmp/ziti-{{ ziti_version }}.tar.gz"
-    dest: "{{ ziti_home }}/bin"
-    remote_src: yes
+- name: Create Ziti directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
     owner: "{{ ziti_user }}"
     group: "{{ ziti_group }}"
-    extra_opts:
-      - --strip-components=1
+    mode: '0750'
+  loop:
+    - "{{ ziti_home }}"
+    - "{{ ziti_home }}/bin"
+    - "{{ ziti_home }}/controller"
+    - "{{ ziti_home }}/router"
+    - "{{ ziti_home }}/pki"
+    - "{{ ziti_home }}/data"
+    - "{{ ziti_home }}/logs"
+    - "{{ ziti_home }}/enrollments"
 
-- name: Ensure ziti binary is executable
-  file:
+- name: Check if Ziti binary already exists
+  ansible.builtin.stat:
     path: "{{ ziti_home }}/bin/ziti"
-    mode: '0755'
+  register: ziti_binary
+
+- name: Download Ziti release
+  ansible.builtin.get_url:
+    url: "https://github.com/openziti/ziti/releases/download/v{{ ziti_version }}/ziti-linux-arm64-{{ ziti_version }}.tar.gz"
+    dest: /tmp/ziti.tar.gz
+    mode: '0644'
+  when: not ziti_binary.stat.exists
+  # TODO: Add checksum verification for security
+
+- name: Extract Ziti binary
+  ansible.builtin.unarchive:
+    src: /tmp/ziti.tar.gz
+    dest: "{{ ziti_home }}/bin"
+    remote_src: true
     owner: "{{ ziti_user }}"
     group: "{{ ziti_group }}"
+  when: not ziti_binary.stat.exists
+
+- name: Set Ziti binary permissions
+  ansible.builtin.file:
+    path: "{{ ziti_home }}/bin/ziti"
+    owner: "{{ ziti_user }}"
+    group: "{{ ziti_group }}"
+    mode: '0755'
 
 - name: Create symlink to /usr/local/bin
-  file:
+  ansible.builtin.file:
     src: "{{ ziti_home }}/bin/ziti"
     dest: /usr/local/bin/ziti
     state: link
 
 - name: Verify Ziti installation
-  command: "{{ ziti_home }}/bin/ziti version"
-  register: ziti_version_check
+  ansible.builtin.command:
+    cmd: "{{ ziti_home }}/bin/ziti version"
+  register: ziti_version_output
   changed_when: false
 
 - name: Display Ziti version
-  debug:
-    msg: "Installed Ziti version: {{ ziti_version_check.stdout }}"
+  ansible.builtin.debug:
+    msg: "Installed Ziti version: {{ ziti_version_output.stdout }}"
 
+- name: Clean up downloaded archive
+  ansible.builtin.file:
+    path: /tmp/ziti.tar.gz
+    state: absent

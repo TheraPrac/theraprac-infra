@@ -1,12 +1,18 @@
 # =============================================================================
-# TheraPrac Infrastructure - Phase 4: Ziti Controller + Router
+# TheraPrac Infrastructure - Phase 4: Ziti Server Infrastructure
 # =============================================================================
-# This module deploys:
-#   - EC2 instance running Ziti controller + router (combined)
+# This module deploys INFRASTRUCTURE ONLY for the Ziti controller + router:
+#   - EC2 instance (plain OS, no software installation)
 #   - Application Load Balancer for public HTTPS access
 #   - ACM certificate with DNS validation
-#   - Route53 DNS record
+#   - Route53 public DNS record (ziti-nonprod.theraprac.com)
+#   - Route53 private hosted zone (theraprac-internal.com)
+#   - Route53 private DNS record (ziti-instance-nonprod.theraprac-internal.com)
 #   - Security groups with least-privilege access
+#   - EC2 Instance Connect Endpoint for SSH access
+#
+# IMPORTANT: Ziti software installation and configuration is handled by
+# Ansible, NOT Terraform. See ansible/ziti-nonprod/ for the playbook.
 # =============================================================================
 
 terraform {
@@ -16,10 +22,6 @@ terraform {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2"
     }
   }
 
@@ -79,9 +81,9 @@ data "terraform_remote_state" "iam" {
   }
 }
 
-# Route53 hosted zone
-data "aws_route53_zone" "main" {
-  name         = var.route53_zone_name
+# Route53 public hosted zone (theraprac.com)
+data "aws_route53_zone" "public" {
+  name         = var.route53_public_zone_name
   private_zone = false
 }
 
@@ -111,7 +113,8 @@ data "aws_ami" "amazon_linux_2023_arm" {
 # =============================================================================
 
 locals {
-  vpc_id = data.terraform_remote_state.vpc.outputs.vpc_id
+  vpc_id   = data.terraform_remote_state.vpc.outputs.vpc_id
+  vpc_cidr = data.terraform_remote_state.vpc.outputs.vpc_cidr
 
   # Subnet IDs
   ziti_subnet_id = data.terraform_remote_state.vpc.outputs.private_ziti_nonprod_subnet_ids_by_az["az1"]
@@ -121,16 +124,51 @@ locals {
     data.terraform_remote_state.vpc.outputs.public_subnet_ids_by_az["az3"],
   ]
 
-  # IAM instance profile
+  # IAM instance profile (created in Phase 3)
   ziti_instance_profile = data.terraform_remote_state.iam.outputs.ziti_controller_instance_profile_name
 }
+
+# =============================================================================
+# Private Hosted Zone (theraprac-internal.com)
+# =============================================================================
+# This private zone is used for internal service discovery within the VPC.
+# Only resources within the associated VPC can resolve these DNS names.
+
+resource "aws_route53_zone" "private" {
+  name    = var.route53_private_zone_name
+  comment = "Private hosted zone for TheraPrac internal services"
+
+  vpc {
+    vpc_id = local.vpc_id
+  }
+
+  tags = {
+    Name = "theraprac-internal"
+  }
+}
+
+# =============================================================================
+# FUTURE DNS RECORDS (to be created in later phases)
+# =============================================================================
+# 
+# App Server (Phase 5 - shared Next.js + Go API instance):
+#   Name: app-nonprod.theraprac-internal.com
+#   Type: A
+#   Target: app nonprod EC2 private IP
+#
+# Database (Phase 6 - RDS):
+#   Name: db-nonprod.theraprac-internal.com
+#   Type: CNAME
+#   Target: RDS endpoint (e.g., theraprac-nonprod.xxxxx.us-west-2.rds.amazonaws.com)
+#
+# =============================================================================
 
 # =============================================================================
 # ACM Certificate
 # =============================================================================
 
 resource "aws_acm_certificate" "ziti" {
-  domain_name       = var.domain_name
+  domain_name       = var.ziti_public_domain
   validation_method = "DNS"
 
   tags = {
@@ -142,7 +180,7 @@ resource "aws_acm_certificate" "ziti" {
   }
 }
 
-# DNS validation record
+# DNS validation record in public zone
 resource "aws_route53_record" "cert_validation" {
   for_each = {
     for dvo in aws_acm_certificate.ziti.domain_validation_options : dvo.domain_name => {
@@ -157,7 +195,7 @@ resource "aws_route53_record" "cert_validation" {
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = data.aws_route53_zone.main.zone_id
+  zone_id         = data.aws_route53_zone.public.zone_id
 }
 
 # Certificate validation
@@ -170,10 +208,12 @@ resource "aws_acm_certificate_validation" "ziti" {
 # Security Groups
 # =============================================================================
 
-# ALB Security Group
+# -----------------------------------------------------------------------------
+# ALB Security Group (ziti-alb-sg)
+# -----------------------------------------------------------------------------
 resource "aws_security_group" "alb" {
   name        = "ziti-alb-${var.environment}"
-  description = "Security group for Ziti ALB"
+  description = "Security group for Ziti public ALB"
   vpc_id      = local.vpc_id
 
   tags = {
@@ -181,7 +221,7 @@ resource "aws_security_group" "alb" {
   }
 }
 
-# ALB inbound from internet on 443
+# ALB inbound: HTTPS from internet
 resource "aws_vpc_security_group_ingress_rule" "alb_https" {
   security_group_id = aws_security_group.alb.id
   description       = "Allow HTTPS from internet"
@@ -193,8 +233,8 @@ resource "aws_vpc_security_group_ingress_rule" "alb_https" {
   tags = { Name = "alb-https-inbound" }
 }
 
-# ALB outbound to Ziti instance (HTTPS traffic)
-resource "aws_vpc_security_group_egress_rule" "alb_to_ziti" {
+# ALB outbound: to Ziti EC2 on 443 (HTTPS traffic)
+resource "aws_vpc_security_group_egress_rule" "alb_to_ziti_https" {
   security_group_id            = aws_security_group.alb.id
   description                  = "Allow HTTPS to Ziti instance"
   ip_protocol                  = "tcp"
@@ -202,11 +242,11 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_ziti" {
   to_port                      = 443
   referenced_security_group_id = aws_security_group.ziti.id
 
-  tags = { Name = "alb-to-ziti" }
+  tags = { Name = "alb-to-ziti-https" }
 }
 
-# ALB outbound to Ziti instance (health check traffic)
-resource "aws_vpc_security_group_egress_rule" "alb_to_ziti_healthcheck" {
+# ALB outbound: to Ziti EC2 on 8080 (health check)
+resource "aws_vpc_security_group_egress_rule" "alb_to_ziti_health" {
   security_group_id            = aws_security_group.alb.id
   description                  = "Allow health check to Ziti instance"
   ip_protocol                  = "tcp"
@@ -214,22 +254,24 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_ziti_healthcheck" {
   to_port                      = 8080
   referenced_security_group_id = aws_security_group.ziti.id
 
-  tags = { Name = "alb-to-ziti-healthcheck" }
+  tags = { Name = "alb-to-ziti-health" }
 }
 
-# Ziti EC2 Security Group
+# -----------------------------------------------------------------------------
+# Ziti EC2 Security Group (ziti-ec2-sg)
+# -----------------------------------------------------------------------------
 resource "aws_security_group" "ziti" {
-  name        = "ziti-instance-${var.environment}"
+  name        = "ziti-ec2-${var.environment}"
   description = "Security group for Ziti EC2 instance"
   vpc_id      = local.vpc_id
 
   tags = {
-    Name = "ziti-instance-${var.environment}"
+    Name = "ziti-ec2-${var.environment}"
   }
 }
 
-# Ziti inbound from ALB on 443
-resource "aws_vpc_security_group_ingress_rule" "ziti_from_alb" {
+# Ziti inbound: 443 from ALB only
+resource "aws_vpc_security_group_ingress_rule" "ziti_https_from_alb" {
   security_group_id            = aws_security_group.ziti.id
   description                  = "Allow HTTPS from ALB"
   ip_protocol                  = "tcp"
@@ -237,11 +279,11 @@ resource "aws_vpc_security_group_ingress_rule" "ziti_from_alb" {
   to_port                      = 443
   referenced_security_group_id = aws_security_group.alb.id
 
-  tags = { Name = "ziti-from-alb" }
+  tags = { Name = "ziti-https-from-alb" }
 }
 
-# Ziti inbound from ALB on 8080 for health checks
-resource "aws_vpc_security_group_ingress_rule" "ziti_healthcheck_from_alb" {
+# Ziti inbound: 8080 from ALB only (health check)
+resource "aws_vpc_security_group_ingress_rule" "ziti_health_from_alb" {
   security_group_id            = aws_security_group.ziti.id
   description                  = "Allow health check from ALB"
   ip_protocol                  = "tcp"
@@ -249,58 +291,38 @@ resource "aws_vpc_security_group_ingress_rule" "ziti_healthcheck_from_alb" {
   to_port                      = 8080
   referenced_security_group_id = aws_security_group.alb.id
 
-  tags = { Name = "ziti-healthcheck-from-alb" }
+  tags = { Name = "ziti-health-from-alb" }
 }
 
-# Ziti inbound from VPC for internal Ziti traffic (controller API, router links)
-resource "aws_vpc_security_group_ingress_rule" "ziti_from_vpc" {
-  security_group_id = aws_security_group.ziti.id
-  description       = "Allow Ziti traffic from VPC"
-  ip_protocol       = "tcp"
-  from_port         = 6262
-  to_port           = 6262
-  cidr_ipv4         = var.vpc_cidr
-
-  tags = { Name = "ziti-internal" }
-}
-
-# Ziti outbound to VPC (for internal services)
-resource "aws_vpc_security_group_egress_rule" "ziti_to_vpc" {
-  security_group_id = aws_security_group.ziti.id
-  description       = "Allow all to VPC"
-  ip_protocol       = "-1"
-  cidr_ipv4         = var.vpc_cidr
-
-  tags = { Name = "ziti-to-vpc" }
-}
-
-# Ziti outbound to internet via NAT (for AWS APIs, package downloads)
+# Ziti outbound: all traffic to 0.0.0.0/0 via NAT Gateway
+# Required for: package updates, Ziti binary downloads, AWS API calls
 resource "aws_vpc_security_group_egress_rule" "ziti_to_internet" {
   security_group_id = aws_security_group.ziti.id
-  description       = "Allow HTTPS to internet via NAT"
-  ip_protocol       = "tcp"
-  from_port         = 443
-  to_port           = 443
+  description       = "Allow all outbound via NAT Gateway"
+  ip_protocol       = "-1"
   cidr_ipv4         = "0.0.0.0/0"
 
   tags = { Name = "ziti-to-internet" }
 }
 
 # =============================================================================
-# EC2 Instance
+# EC2 Instance (Plain OS - Ziti installed via Ansible)
 # =============================================================================
 
 resource "aws_instance" "ziti" {
-  ami                    = data.aws_ami.amazon_linux_2023_arm.id
-  instance_type          = var.instance_type
-  subnet_id              = local.ziti_subnet_id
-  iam_instance_profile   = local.ziti_instance_profile
-  vpc_security_group_ids = [aws_security_group.ziti.id]
+  # Amazon Linux 2023 ARM64 (Graviton) - supported until 2028
+  ami           = data.aws_ami.amazon_linux_2023_arm.id
+  instance_type = var.instance_type
 
-  # No public IP - private subnet with NAT
+  # Network configuration
+  subnet_id                   = local.ziti_subnet_id
+  vpc_security_group_ids      = [aws_security_group.ziti.id]
   associate_public_ip_address = false
 
-  # Root volume (AL2023 requires minimum 30GB)
+  # IAM role for Secrets Manager, CloudWatch, etc.
+  iam_instance_profile = local.ziti_instance_profile
+
+  # Root volume
   root_block_device {
     volume_type           = "gp3"
     volume_size           = 30
@@ -312,39 +334,26 @@ resource "aws_instance" "ziti" {
     }
   }
 
-  # Full Ziti setup embedded in user_data (no external dependencies)
-  user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    ziti_version    = var.ziti_version
-    ziti_domain     = var.domain_name
-    environment     = var.environment
-    controller_port = 443
-    router_port     = 6262
-    health_port     = 8080
-  })
+  # NO user_data - Ziti is installed and configured via Ansible
+  # See: ansible/ziti-nonprod/playbook.yml
+
+  # Basic monitoring only (detailed monitoring costs extra)
+  monitoring = false
 
   tags = {
     Name    = "ziti-${var.environment}"
-    Role    = "ziti-controller-router"
-  }
-
-  lifecycle {
-    # User data changes require instance replacement to take effect
-    replace_triggered_by = [null_resource.user_data_trigger]
+    Role    = "ziti-server"
+    Ansible = "ziti-${var.environment}"
   }
 }
 
-# Track user_data changes to trigger instance replacement
-resource "null_resource" "user_data_trigger" {
-  triggers = {
-    user_data_hash = sha256(templatefile("${path.module}/user-data.sh.tftpl", {
-      ziti_version    = var.ziti_version
-      ziti_domain     = var.domain_name
-      environment     = var.environment
-      controller_port = 443
-      router_port     = 6262
-      health_port     = 8080
-    }))
-  }
+# Private DNS record for Ziti EC2 instance
+resource "aws_route53_record" "ziti_private" {
+  zone_id = aws_route53_zone.private.zone_id
+  name    = "ziti-instance-${var.environment}.${var.route53_private_zone_name}"
+  type    = "A"
+  ttl     = 300
+  records = [aws_instance.ziti.private_ip]
 }
 
 # =============================================================================
@@ -416,12 +425,12 @@ resource "aws_lb_listener" "https" {
 }
 
 # =============================================================================
-# Route53 DNS Record
+# Route53 Public DNS Record
 # =============================================================================
 
-resource "aws_route53_record" "ziti" {
-  zone_id = data.aws_route53_zone.main.zone_id
-  name    = var.domain_name
+resource "aws_route53_record" "ziti_public" {
+  zone_id = data.aws_route53_zone.public.zone_id
+  name    = var.ziti_public_domain
   type    = "A"
 
   alias {

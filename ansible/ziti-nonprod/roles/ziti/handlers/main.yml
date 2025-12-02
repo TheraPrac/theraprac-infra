@@ -1,30 +1,28 @@
----
 # =============================================================================
-# Ziti Role Handlers
+# Ziti Role - Handlers
+# =============================================================================
+# Handlers for restarting services when configuration changes.
 # =============================================================================
 
+---
 - name: reload systemd
-  systemd:
-    daemon_reload: yes
+  ansible.builtin.systemd:
+    daemon_reload: true
 
 - name: restart ziti-controller
-  systemd:
+  ansible.builtin.systemd:
     name: ziti-controller
     state: restarted
+  when: ziti_restart_on_change | default(true)
 
 - name: restart ziti-router
-  systemd:
+  ansible.builtin.systemd:
     name: ziti-router
     state: restarted
+  when: ziti_restart_on_change | default(true)
 
-- name: restart sshd
-  systemd:
-    name: sshd
+- name: restart ziti-healthcheck
+  ansible.builtin.systemd:
+    name: ziti-healthcheck
     state: restarted
-
-- name: restart fail2ban
-  systemd:
-    name: fail2ban
-    state: restarted
-  ignore_errors: yes
-
+  when: ziti_restart_on_change | default(true)

@@ -1,0 +1,67 @@
+# =============================================================================
+# Ziti Role - Systemd Service Tasks
+# =============================================================================
+# Creates and manages systemd service units for Ziti controller and router.
+# =============================================================================
+
+---
+- name: Deploy ziti-controller systemd service
+  ansible.builtin.template:
+    src: ziti-controller.service.j2
+    dest: /etc/systemd/system/ziti-controller.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart ziti-controller
+
+- name: Deploy ziti-router systemd service
+  ansible.builtin.template:
+    src: ziti-router.service.j2
+    dest: /etc/systemd/system/ziti-router.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart ziti-router
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enable and start ziti-controller
+  ansible.builtin.systemd:
+    name: ziti-controller
+    enabled: true
+    state: started
+
+- name: Wait for controller to be listening
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ ziti_controller_port }}"
+    timeout: 60
+  # TODO: Consider more sophisticated health check
+
+- name: Enable and start ziti-router
+  ansible.builtin.systemd:
+    name: ziti-router
+    enabled: true
+    state: started
+
+- name: Verify services are running
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+  loop:
+    - ziti-controller
+    - ziti-router
+  register: service_status
+
+- name: Display service status
+  ansible.builtin.debug:
+    msg: "{{ item.item }}: {{ item.status.ActiveState }}"
+  loop: "{{ service_status.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+

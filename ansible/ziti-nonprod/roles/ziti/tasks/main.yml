@@ -1,63 +1,30 @@
+# =============================================================================
+# Ziti Role - Main Task Entry Point
+# =============================================================================
+# Includes all task files in the correct order.
+# =============================================================================
+
 ---
-# =============================================================================
-# Ziti Role - Main Tasks
-# =============================================================================
-# Execution order is critical:
-#   1. Prerequisites (packages)
-#   2. User & directories
-#   3. Binaries
-#   4. PKI
-#   5. Controller config + init
-#   6. Health check (starts immediately)
-#   7. Services - starts controller, waits for ready
-#   8. Router enrollment (requires running controller)
-#   9. Services - starts router
-#   10. Hardening
-
-- name: Include prerequisites
-  include_tasks: prerequisites.yml
-  tags: [prerequisites]
-
-- name: Include user setup
-  include_tasks: user.yml
-  tags: [user]
-
-- name: Include directory setup
-  include_tasks: directories.yml
-  tags: [directories]
-
-- name: Include binary installation
-  include_tasks: install.yml
+- name: Include Ziti installation tasks
+  ansible.builtin.include_tasks: install.yml
   tags: [install]
 
-- name: Include PKI generation
-  include_tasks: pki.yml
+- name: Include PKI generation tasks
+  ansible.builtin.include_tasks: pki.yml
   tags: [pki]
 
-- name: Include controller configuration
-  include_tasks: controller.yml
+- name: Include controller configuration tasks
+  ansible.builtin.include_tasks: controller.yml
   tags: [controller]
 
-- name: Include health check setup
-  include_tasks: healthcheck.yml
-  tags: [healthcheck]
-
-- name: Include systemd services (starts controller)
-  include_tasks: services.yml
-  tags: [services]
-
-- name: Include router enrollment (requires running controller)
-  include_tasks: router.yml
+- name: Include router configuration tasks
+  ansible.builtin.include_tasks: router.yml
   tags: [router]
 
-- name: Start router service after enrollment
-  systemd:
-    name: ziti-router
-    enabled: yes
-    state: started
-  tags: [router, services]
+- name: Include systemd service tasks
+  ansible.builtin.include_tasks: systemd.yml
+  tags: [services]
 
-- name: Include hardening
-  include_tasks: hardening.yml
-  tags: [hardening]
-
+- name: Include health check tasks
+  ansible.builtin.include_tasks: healthcheck.yml
+  tags: [healthcheck]
