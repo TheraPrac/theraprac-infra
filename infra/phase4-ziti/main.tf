@@ -196,16 +196,28 @@ resource "aws_vpc_security_group_ingress_rule" "alb_https" {
   tags = { Name = "alb-https-inbound" }
 }
 
-# ALB outbound to Ziti instance
+# ALB outbound to Ziti instance (HTTPS traffic)
 resource "aws_vpc_security_group_egress_rule" "alb_to_ziti" {
   security_group_id            = aws_security_group.alb.id
-  description                  = "Allow to Ziti instance"
+  description                  = "Allow HTTPS to Ziti instance"
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
   referenced_security_group_id = aws_security_group.ziti.id
 
   tags = { Name = "alb-to-ziti" }
+}
+
+# ALB outbound to Ziti instance (health check traffic)
+resource "aws_vpc_security_group_egress_rule" "alb_to_ziti_healthcheck" {
+  security_group_id            = aws_security_group.alb.id
+  description                  = "Allow health check to Ziti instance"
+  ip_protocol                  = "tcp"
+  from_port                    = 8080
+  to_port                      = 8080
+  referenced_security_group_id = aws_security_group.ziti.id
+
+  tags = { Name = "alb-to-ziti-healthcheck" }
 }
 
 # Ziti EC2 Security Group
@@ -229,6 +241,18 @@ resource "aws_vpc_security_group_ingress_rule" "ziti_from_alb" {
   referenced_security_group_id = aws_security_group.alb.id
 
   tags = { Name = "ziti-from-alb" }
+}
+
+# Ziti inbound from ALB on 8080 for health checks
+resource "aws_vpc_security_group_ingress_rule" "ziti_healthcheck_from_alb" {
+  security_group_id            = aws_security_group.ziti.id
+  description                  = "Allow health check from ALB"
+  ip_protocol                  = "tcp"
+  from_port                    = 8080
+  to_port                      = 8080
+  referenced_security_group_id = aws_security_group.alb.id
+
+  tags = { Name = "ziti-healthcheck-from-alb" }
 }
 
 # Ziti inbound from VPC for internal Ziti traffic (controller API, router links)
@@ -351,8 +375,8 @@ resource "aws_lb_target_group" "ziti" {
   health_check {
     enabled             = true
     path                = "/health"
-    port                = "443"
-    protocol            = "HTTPS"
+    port                = "8080"
+    protocol            = "HTTP"
     healthy_threshold   = 2
     unhealthy_threshold = 3
     timeout             = 5
