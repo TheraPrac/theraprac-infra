@@ -63,10 +63,11 @@ locals {
   public_subnet_az1_id = data.terraform_remote_state.vpc.outputs.public_subnet_ids_by_az["az1"]
 
   # Route tables for non-prod private subnets that need NAT route
-  # Note: ziti_nonprod already has IGW route (for Ziti overlay network)
+  # All nonprod private subnets route through NAT for internet access
   nat_route_table_ids = [
     data.terraform_remote_state.vpc.outputs.route_table_ids["app_nonprod"],
     data.terraform_remote_state.vpc.outputs.route_table_ids["db_nonprod"],
+    data.terraform_remote_state.vpc.outputs.route_table_ids["ziti_nonprod"],
   ]
 
   # All route tables for S3 gateway endpoint

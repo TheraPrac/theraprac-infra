@@ -221,14 +221,12 @@ resource "aws_route_table" "private_db_nonprod" {
   })
 }
 
-# Non-Prod Ziti Route Table (routes to IGW for outbound)
+# Non-Prod Ziti Route Table (NAT route added by Phase 2)
 resource "aws_route_table" "private_ziti_nonprod" {
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main.id
-  }
+  # Default route (0.0.0.0/0) will be added by Phase 2 to point to NAT instance
+  # Local route is implicit
 
   tags = merge(var.common_tags, {
     Name        = "${var.vpc_name}-rt-ziti-nonprod"
