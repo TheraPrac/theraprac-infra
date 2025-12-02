@@ -65,7 +65,7 @@ echo "[4/9] Installing Ziti v$ZITI_VERSION..."
 ARCH="arm64"
 cd /tmp
 wget -q "https://github.com/openziti/ziti/releases/download/v$ZITI_VERSION/ziti-linux-$ARCH-$ZITI_VERSION.tar.gz"
-tar -xzf "ziti-linux-$ARCH-$ZITI_VERSION.tar.gz" -C $ZITI_HOME/bin --strip-components=1
+tar -xzf "ziti-linux-$ARCH-$ZITI_VERSION.tar.gz" -C $ZITI_HOME/bin
 chmod +x $ZITI_HOME/bin/ziti
 ln -sf $ZITI_HOME/bin/ziti /usr/local/bin/ziti
 chown -R $ZITI_USER:$ZITI_GROUP $ZITI_HOME/bin
