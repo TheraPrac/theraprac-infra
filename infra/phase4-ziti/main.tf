@@ -114,7 +114,7 @@ data "aws_ami" "amazon_linux_2023_arm" {
 
 locals {
   vpc_id   = data.terraform_remote_state.vpc.outputs.vpc_id
-  vpc_cidr = data.terraform_remote_state.vpc.outputs.vpc_cidr
+  vpc_cidr = data.terraform_remote_state.vpc.outputs.vpc_cidr_block
 
   # Subnet IDs
   ziti_subnet_id = data.terraform_remote_state.vpc.outputs.private_ziti_nonprod_subnet_ids_by_az["az1"]
