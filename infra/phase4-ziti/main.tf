@@ -213,7 +213,7 @@ resource "aws_acm_certificate_validation" "ziti" {
 # -----------------------------------------------------------------------------
 resource "aws_security_group" "alb" {
   name        = "ziti-alb-${var.environment}"
-  description = "Security group for Ziti public ALB"
+  description = "Security group for Ziti ALB"
   vpc_id      = local.vpc_id
 
   tags = {
@@ -261,12 +261,12 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_ziti_health" {
 # Ziti EC2 Security Group (ziti-ec2-sg)
 # -----------------------------------------------------------------------------
 resource "aws_security_group" "ziti" {
-  name        = "ziti-ec2-${var.environment}"
+  name        = "ziti-instance-${var.environment}"
   description = "Security group for Ziti EC2 instance"
   vpc_id      = local.vpc_id
 
   tags = {
-    Name = "ziti-ec2-${var.environment}"
+    Name = "ziti-instance-${var.environment}"
   }
 }
 

@@ -67,7 +67,6 @@
       --ca-name {{ ziti_pki_intermediate_name }}
       --client-name {{ ziti_pki_server_name }}
       --client-file {{ ziti_pki_server_name }}-client
-      --key-file {{ ziti_pki_server_name }}-client
     creates: "{{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-client.cert"
   when: not client_cert_stat.stat.exists
 

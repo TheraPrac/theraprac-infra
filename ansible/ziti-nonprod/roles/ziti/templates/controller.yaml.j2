@@ -29,8 +29,15 @@ healthChecks:
     timeout: 20s
     initialDelay: 30s
 
-# Edge enrollment configuration
+# Edge configuration
 edge:
+  # API configuration (required for edge init)
+  api:
+    activityUpdateInterval: 90s
+    activityUpdateBatchSize: 250
+    sessionTimeout: 30m
+    address: {{ ziti_public_endpoint }}:443
+  # Enrollment configuration
   enrollment:
     signingCert:
       cert: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_intermediate_name }}.cert
