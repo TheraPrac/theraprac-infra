@@ -44,6 +44,24 @@ variable "ziti_version" {
   default     = "1.1.3"
 }
 
+variable "github_repo" {
+  description = "GitHub repository URL for infrastructure code"
+  type        = string
+  default     = "https://github.com/JoeFinlinson/theraprac-infra.git"
+}
+
+variable "github_branch" {
+  description = "Git branch to use for Ansible playbooks"
+  type        = string
+  default     = "main"
+}
+
+variable "ansible_dir" {
+  description = "Path to Ansible playbook directory within repo"
+  type        = string
+  default     = "ansible/ziti-nonprod"
+}
+
 variable "vpc_cidr" {
   description = "VPC CIDR block"
   type        = string

@@ -20,7 +20,7 @@
   notify: restart sshd
 
 - name: Install fail2ban
-  yum:
+  dnf:
     name: fail2ban
     state: present
   ignore_errors: yes

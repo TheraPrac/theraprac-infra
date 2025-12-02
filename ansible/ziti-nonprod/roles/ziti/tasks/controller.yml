@@ -20,22 +20,33 @@
 - name: Initialize controller database
   when: not ctrl_db_exists.stat.exists
   block:
+    - name: Generate admin password
+      set_fact:
+        ziti_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+      no_log: true
+
     - name: Run controller edge init
       command: >
         {{ ziti_home }}/bin/ziti controller edge init
         {{ ziti_home }}/controller/controller.yaml
         --username admin
-        --password "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+        --password "{{ ziti_admin_password }}"
       become_user: "{{ ziti_user }}"
       register: controller_init
       no_log: true
 
-    - name: Save admin password to file
+    - name: Save admin credentials to file
       copy:
-        content: "{{ controller_init.stdout }}"
+        content: |
+          # Ziti Admin Credentials
+          # Generated: {{ ansible_date_time.iso8601 }}
+          # WARNING: Keep this file secure!
+          
+          Username: admin
+          Password: {{ ziti_admin_password }}
         dest: "{{ ziti_home }}/controller/admin-credentials.txt"
         owner: "{{ ziti_user }}"
         group: "{{ ziti_group }}"
         mode: '0600'
-      when: controller_init is changed
+      no_log: true
 

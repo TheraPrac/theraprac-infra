@@ -1,16 +1,16 @@
 ---
 # =============================================================================
-# Prerequisites Installation
+# Prerequisites Installation (Amazon Linux 2023)
 # =============================================================================
 
 - name: Update system packages
-  yum:
+  dnf:
     name: '*'
     state: latest
     update_cache: yes
 
 - name: Install required packages
-  yum:
+  dnf:
     name:
       - jq
       - curl

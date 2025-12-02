@@ -2,6 +2,17 @@
 # =============================================================================
 # Ziti Role - Main Tasks
 # =============================================================================
+# Execution order is critical:
+#   1. Prerequisites (packages)
+#   2. User & directories
+#   3. Binaries
+#   4. PKI
+#   5. Controller config + init
+#   6. Health check (starts immediately)
+#   7. Services - starts controller, waits for ready
+#   8. Router enrollment (requires running controller)
+#   9. Services - starts router
+#   10. Hardening
 
 - name: Include prerequisites
   include_tasks: prerequisites.yml
@@ -27,17 +38,24 @@
   include_tasks: controller.yml
   tags: [controller]
 
-- name: Include router configuration
-  include_tasks: router.yml
-  tags: [router]
-
 - name: Include health check setup
   include_tasks: healthcheck.yml
   tags: [healthcheck]
 
-- name: Include systemd services
+- name: Include systemd services (starts controller)
   include_tasks: services.yml
   tags: [services]
+
+- name: Include router enrollment (requires running controller)
+  include_tasks: router.yml
+  tags: [router]
+
+- name: Start router service after enrollment
+  systemd:
+    name: ziti-router
+    enabled: yes
+    state: started
+  tags: [router, services]
 
 - name: Include hardening
   include_tasks: hardening.yml

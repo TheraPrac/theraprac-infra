@@ -3,47 +3,74 @@
 # Ziti Router Configuration
 # =============================================================================
 
-- name: Create router configuration
+- name: Create router configuration template (pre-enrollment)
   template:
     src: router.yaml.j2
     dest: "{{ ziti_home }}/router/router.yaml"
     owner: "{{ ziti_user }}"
     group: "{{ ziti_group }}"
     mode: '0640'
-  notify: restart ziti-router
 
 - name: Check if router is enrolled
   stat:
     path: "{{ ziti_home }}/router/router.cert"
   register: router_enrolled
 
-- name: Create router enrollment JWT
+- name: Enroll router with controller
   when: not router_enrolled.stat.exists
   block:
-    - name: Wait for controller to be ready
-      wait_for:
-        host: 127.0.0.1
-        port: "{{ ziti_controller_port }}"
-        timeout: 60
-      ignore_errors: yes
+    - name: Wait for controller API to be ready
+      uri:
+        url: "https://127.0.0.1:{{ ziti_controller_port }}/edge/client/v1/version"
+        validate_certs: no
+        status_code: 200
+      register: controller_ready
+      retries: 30
+      delay: 5
+      until: controller_ready.status == 200
 
-    - name: Create router in controller
+    - name: Read admin credentials
+      slurp:
+        src: "{{ ziti_home }}/controller/admin-credentials.txt"
+      register: admin_creds_file
+      no_log: true
+
+    - name: Parse admin password
+      set_fact:
+        ziti_admin_password: "{{ admin_creds_file.content | b64decode | regex_search('Password: (.+)', '\\1') | first }}"
+      no_log: true
+
+    - name: Login to controller
+      command: >
+        {{ ziti_home }}/bin/ziti edge login
+        https://127.0.0.1:{{ ziti_controller_port }}
+        -u admin
+        -p "{{ ziti_admin_password }}"
+        --yes
+      become_user: "{{ ziti_user }}"
+      no_log: true
+      register: ziti_login
+
+    - name: Create edge router
       command: >
         {{ ziti_home }}/bin/ziti edge create edge-router router-{{ environment }}
         --jwt-output-file {{ ziti_home }}/enrollments/router.jwt
         --tunneler-enabled
-      environment:
-        ZITI_CTRL_ADVERTISED_ADDRESS: "{{ ziti_domain }}"
-        ZITI_CTRL_ADVERTISED_PORT: "{{ ziti_controller_port }}"
-        ZITI_USER: admin
       become_user: "{{ ziti_user }}"
-      ignore_errors: yes
+      register: router_create
+      failed_when: false
 
-    - name: Enroll router
+    - name: Check if router JWT was created
+      stat:
+        path: "{{ ziti_home }}/enrollments/router.jwt"
+      register: router_jwt_exists
+
+    - name: Enroll router with JWT
       command: >
         {{ ziti_home }}/bin/ziti router enroll
         {{ ziti_home }}/router/router.yaml
         --jwt {{ ziti_home }}/enrollments/router.jwt
       become_user: "{{ ziti_user }}"
-      ignore_errors: yes
+      when: router_jwt_exists.stat.exists
+      notify: restart ziti-router
 

@@ -291,14 +291,12 @@ resource "aws_instance" "ziti" {
     }
   }
 
-  # Full Ziti setup via cloud-init - hands-off deployment
+  # Bootstrap via cloud-init, configure via Ansible (hybrid approach)
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    ziti_version    = var.ziti_version
-    ziti_domain     = var.domain_name
-    environment     = var.environment
-    controller_port = 443
-    router_port     = 6262
-    health_port     = 8080
+    github_repo   = var.github_repo
+    github_branch = var.github_branch
+    ansible_dir   = var.ansible_dir
+    environment   = var.environment
   })
 
   tags = {
@@ -316,12 +314,10 @@ resource "aws_instance" "ziti" {
 resource "null_resource" "user_data_trigger" {
   triggers = {
     user_data_hash = sha256(templatefile("${path.module}/user-data.sh.tftpl", {
-      ziti_version    = var.ziti_version
-      ziti_domain     = var.domain_name
-      environment     = var.environment
-      controller_port = 443
-      router_port     = 6262
-      health_port     = 8080
+      github_repo   = var.github_repo
+      github_branch = var.github_branch
+      ansible_dir   = var.ansible_dir
+      environment   = var.environment
     }))
   }
 }
