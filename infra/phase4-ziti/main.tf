@@ -17,6 +17,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
   }
 
   backend "s3" {
@@ -81,19 +85,24 @@ data "aws_route53_zone" "main" {
   private_zone = false
 }
 
-# Latest Amazon Linux 2 ARM64 AMI
-data "aws_ami" "amazon_linux_2_arm" {
+# Latest Amazon Linux 2023 ARM64 AMI (supported until 2028)
+data "aws_ami" "amazon_linux_2023_arm" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-arm64-gp2"]
+    values = ["al2023-ami-*-arm64"]
   }
 
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
   }
 }
 
@@ -261,7 +270,7 @@ resource "aws_vpc_security_group_egress_rule" "ziti_to_internet" {
 # =============================================================================
 
 resource "aws_instance" "ziti" {
-  ami                    = data.aws_ami.amazon_linux_2_arm.id
+  ami                    = data.aws_ami.amazon_linux_2023_arm.id
   instance_type          = var.instance_type
   subnet_id              = local.ziti_subnet_id
   iam_instance_profile   = local.ziti_instance_profile
@@ -282,21 +291,38 @@ resource "aws_instance" "ziti" {
     }
   }
 
-  # Minimal user data - Ansible will do the real setup
-  user_data = <<-EOF
-    #!/bin/bash
-    # Placeholder - Ansible will configure this instance
-    echo "Ziti instance launched at $(date)" > /tmp/launch.log
-  EOF
+  # Full Ziti setup via cloud-init - hands-off deployment
+  user_data = templatefile("${path.module}/user-data.sh.tftpl", {
+    ziti_version    = var.ziti_version
+    ziti_domain     = var.domain_name
+    environment     = var.environment
+    controller_port = 443
+    router_port     = 6262
+    health_port     = 8080
+  })
 
   tags = {
     Name    = "ziti-${var.environment}"
     Role    = "ziti-controller-router"
-    Ansible = "ziti-nonprod"
   }
 
   lifecycle {
-    ignore_changes = [ami, user_data]
+    # User data changes require instance replacement to take effect
+    replace_triggered_by = [null_resource.user_data_trigger]
+  }
+}
+
+# Track user_data changes to trigger instance replacement
+resource "null_resource" "user_data_trigger" {
+  triggers = {
+    user_data_hash = sha256(templatefile("${path.module}/user-data.sh.tftpl", {
+      ziti_version    = var.ziti_version
+      ziti_domain     = var.domain_name
+      environment     = var.environment
+      controller_port = 443
+      router_port     = 6262
+      health_port     = 8080
+    }))
   }
 }
 

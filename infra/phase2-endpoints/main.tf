@@ -85,13 +85,14 @@ locals {
 # AMI Data Source - Latest Amazon Linux 2 (ARM64 for t4g)
 # =============================================================================
 
-data "aws_ami" "amazon_linux_2_arm" {
+# Latest Amazon Linux 2023 ARM64 AMI (supported until 2028)
+data "aws_ami" "amazon_linux_2023_arm" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-arm64-gp2"]
+    values = ["al2023-ami-*-arm64"]
   }
 
   filter {
@@ -100,8 +101,8 @@ data "aws_ami" "amazon_linux_2_arm" {
   }
 
   filter {
-    name   = "root-device-type"
-    values = ["ebs"]
+    name   = "architecture"
+    values = ["arm64"]
   }
 }
 
@@ -150,7 +151,7 @@ resource "aws_vpc_security_group_egress_rule" "nat_to_internet" {
 # =============================================================================
 
 resource "aws_instance" "nat" {
-  ami                         = data.aws_ami.amazon_linux_2_arm.id
+  ami                         = data.aws_ami.amazon_linux_2023_arm.id
   instance_type               = var.nat_instance_type
   subnet_id                   = local.public_subnet_az1_id
   associate_public_ip_address = true
@@ -163,17 +164,16 @@ resource "aws_instance" "nat" {
     #!/bin/bash
     set -e
 
-    # Enable IP forwarding
-    echo 1 > /proc/sys/net/ipv4/ip_forward
-    echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
+    # Enable IP forwarding persistently
+    echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-nat.conf
+    sysctl -p /etc/sysctl.d/99-nat.conf
 
-    # Configure iptables for NAT (MASQUERADE)
-    yum install -y iptables-services
+    # Install iptables (AL2023 uses nftables backend but iptables-nft provides compatibility)
+    dnf install -y iptables-nft iptables-services
     systemctl enable iptables
     systemctl start iptables
 
     # Get the primary network interface
-    INTERFACE=$(curl -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1 | tr -d '/')
     ETH=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|ens)' | head -1)
 
     # Set up NAT rules

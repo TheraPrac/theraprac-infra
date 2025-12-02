@@ -50,10 +50,10 @@ output "s3_gateway_endpoint_id" {
 
 output "nat_ami_id" {
   description = "AMI ID used for NAT instance"
-  value       = data.aws_ami.amazon_linux_2_arm.id
+  value       = data.aws_ami.amazon_linux_2023_arm.id
 }
 
 output "nat_ami_name" {
   description = "AMI name used for NAT instance"
-  value       = data.aws_ami.amazon_linux_2_arm.name
+  value       = data.aws_ami.amazon_linux_2023_arm.name
 }

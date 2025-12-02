@@ -38,6 +38,12 @@ variable "instance_type" {
   default     = "t4g.micro"
 }
 
+variable "ziti_version" {
+  description = "OpenZiti version to install"
+  type        = string
+  default     = "1.1.3"
+}
+
 variable "vpc_cidr" {
   description = "VPC CIDR block"
   type        = string
