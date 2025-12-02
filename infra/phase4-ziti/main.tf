@@ -384,7 +384,7 @@ resource "aws_lb_target_group" "ziti" {
 
   health_check {
     enabled             = true
-    path                = "/health"
+    path                = "/"
     port                = "8080"
     protocol            = "HTTP"
     healthy_threshold   = 2

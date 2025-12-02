@@ -15,7 +15,7 @@ ziti_healthcheck_dir: "{{ ziti_install_dir }}/healthcheck"
 ziti_bin: "{{ ziti_bin_dir }}/ziti"
 
 # Download URL for ARM64 (latest stable)
-ziti_download_url: "https://get.openziti.io/tarballs/ziti-linux-arm64_latest.tar.gz"
+ziti_download_url: "https://get.openziti.io/latest/arm64"
 
 # Network configuration
 ziti_controller_host: "0.0.0.0"

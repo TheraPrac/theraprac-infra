@@ -57,13 +57,43 @@
     mode: '0644'
   when: not ziti_binary_stat.stat.exists
 
-- name: Extract Ziti bundle
+- name: Create temp extraction directory
+  ansible.builtin.file:
+    path: /tmp/ziti-extract
+    state: directory
+    mode: '0755'
+  when: not ziti_binary_stat.stat.exists
+
+- name: Extract Ziti bundle to temp
   ansible.builtin.unarchive:
     src: /tmp/ziti-linux-arm64.tar.gz
-    dest: "{{ ziti_bin_dir }}"
+    dest: /tmp/ziti-extract
     remote_src: true
-    extra_opts:
-      - --strip-components=1
+  when: not ziti_binary_stat.stat.exists
+
+- name: Find ziti binary in extracted files
+  ansible.builtin.find:
+    paths: /tmp/ziti-extract
+    patterns: "ziti"
+    recurse: true
+    file_type: file
+  register: ziti_found
+  when: not ziti_binary_stat.stat.exists
+
+- name: Copy ziti binary to install directory
+  ansible.builtin.copy:
+    src: "{{ ziti_found.files[0].path }}"
+    dest: "{{ ziti_bin }}"
+    remote_src: true
+    mode: '0755'
+  when:
+    - not ziti_binary_stat.stat.exists
+    - ziti_found.files | length > 0
+
+- name: Clean up temp extraction directory
+  ansible.builtin.file:
+    path: /tmp/ziti-extract
+    state: absent
   when: not ziti_binary_stat.stat.exists
 
 - name: Set Ziti binary permissions
