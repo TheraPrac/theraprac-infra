@@ -279,10 +279,10 @@ resource "aws_instance" "ziti" {
   # No public IP - private subnet with NAT
   associate_public_ip_address = false
 
-  # Root volume
+  # Root volume (AL2023 requires minimum 30GB)
   root_block_device {
     volume_type           = "gp3"
-    volume_size           = 20
+    volume_size           = 30
     encrypted             = true
     delete_on_termination = true
 
