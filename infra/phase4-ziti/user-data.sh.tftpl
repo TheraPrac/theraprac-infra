@@ -34,7 +34,8 @@ ZITI_GROUP="ziti"
 echo "[1/9] Installing prerequisites..."
 
 dnf update -y
-dnf install -y jq curl wget tar openssl python3 python3-pip
+# Note: curl-minimal is pre-installed on AL2023, don't install curl (conflicts)
+dnf install -y jq wget tar openssl python3 python3-pip
 pip3 install flask
 
 # =============================================================================
