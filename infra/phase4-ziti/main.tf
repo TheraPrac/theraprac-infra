@@ -59,7 +59,7 @@ data "terraform_remote_state" "vpc" {
   }
 }
 
-# Remote state from Phase 2 (NAT instance)
+# Remote state from Phase 2 (NAT Gateway)
 data "terraform_remote_state" "nat" {
   backend = "s3"
   config = {
@@ -120,9 +120,6 @@ locals {
     data.terraform_remote_state.vpc.outputs.public_subnet_ids_by_az["az2"],
     data.terraform_remote_state.vpc.outputs.public_subnet_ids_by_az["az3"],
   ]
-
-  # NAT instance security group for outbound rules
-  nat_security_group_id = data.terraform_remote_state.nat.outputs.nat_security_group_id
 
   # IAM instance profile
   ziti_instance_profile = data.terraform_remote_state.iam.outputs.ziti_controller_instance_profile_name
@@ -315,12 +312,14 @@ resource "aws_instance" "ziti" {
     }
   }
 
-  # Bootstrap via cloud-init, configure via Ansible (hybrid approach)
+  # Full Ziti setup embedded in user_data (no external dependencies)
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    github_repo   = var.github_repo
-    github_branch = var.github_branch
-    ansible_dir   = var.ansible_dir
-    environment   = var.environment
+    ziti_version    = var.ziti_version
+    ziti_domain     = var.domain_name
+    environment     = var.environment
+    controller_port = 443
+    router_port     = 6262
+    health_port     = 8080
   })
 
   tags = {
@@ -338,10 +337,12 @@ resource "aws_instance" "ziti" {
 resource "null_resource" "user_data_trigger" {
   triggers = {
     user_data_hash = sha256(templatefile("${path.module}/user-data.sh.tftpl", {
-      github_repo   = var.github_repo
-      github_branch = var.github_branch
-      ansible_dir   = var.ansible_dir
-      environment   = var.environment
+      ziti_version    = var.ziti_version
+      ziti_domain     = var.domain_name
+      environment     = var.environment
+      controller_port = 443
+      router_port     = 6262
+      health_port     = 8080
     }))
   }
 }

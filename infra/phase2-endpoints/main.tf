@@ -1,14 +1,11 @@
 # =============================================================================
-# TheraPrac Infrastructure - Phase 2: NAT Instance + S3 Gateway
+# TheraPrac Infrastructure - Phase 2: NAT Gateway + S3 Gateway
 # =============================================================================
 # This module creates:
-#   - NAT Instance (t4g.nano) in public-az1 for outbound internet access
+#   - NAT Gateway in public-az1 for outbound internet access (~$32/month)
 #   - S3 Gateway Endpoint (free) for private S3 access
 #
-# Cost-optimized architecture for non-prod:
-#   - NAT Instance (~$3/month) instead of NAT Gateway (~$32/month)
-#   - Only az1 private subnets route through NAT
-#   - No interface endpoints (saves ~$130/month)
+# Simplified architecture - NAT Gateway is fully managed by AWS
 # =============================================================================
 
 terraform {
@@ -59,11 +56,10 @@ data "terraform_remote_state" "vpc" {
 locals {
   vpc_id = data.terraform_remote_state.vpc.outputs.vpc_id
 
-  # Public subnet for NAT instance (az1 only)
+  # Public subnet for NAT Gateway (az1 only for nonprod)
   public_subnet_az1_id = data.terraform_remote_state.vpc.outputs.public_subnet_ids_by_az["az1"]
 
   # Route tables for non-prod private subnets that need NAT route
-  # All nonprod private subnets route through NAT for internet access
   nat_route_table_ids = [
     data.terraform_remote_state.vpc.outputs.route_table_ids["app_nonprod"],
     data.terraform_remote_state.vpc.outputs.route_table_ids["db_nonprod"],
@@ -83,120 +79,35 @@ locals {
 }
 
 # =============================================================================
-# AMI Data Source - Latest Amazon Linux 2 (ARM64 for t4g)
+# Elastic IP for NAT Gateway
 # =============================================================================
 
-# Latest Amazon Linux 2023 ARM64 AMI (supported until 2028)
-data "aws_ami" "amazon_linux_2023_arm" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-arm64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-
-  filter {
-    name   = "architecture"
-    values = ["arm64"]
-  }
-}
-
-# =============================================================================
-# Security Group for NAT Instance
-# =============================================================================
-
-resource "aws_security_group" "nat_instance" {
-  name        = "nat-instance-nonprod"
-  description = "Security group for NAT instance"
-  vpc_id      = local.vpc_id
+resource "aws_eip" "nat" {
+  domain = "vpc"
 
   tags = {
-    Name = "nat-instance-nonprod"
-  }
-}
-
-# Inbound: Allow all traffic from VPC (private subnets need to route through)
-resource "aws_vpc_security_group_ingress_rule" "nat_from_vpc" {
-  security_group_id = aws_security_group.nat_instance.id
-
-  description = "Allow all inbound from VPC for NAT"
-  ip_protocol = "-1"
-  cidr_ipv4   = var.vpc_cidr
-
-  tags = {
-    Name = "nat-from-vpc"
-  }
-}
-
-# Outbound: Allow all traffic to internet (NAT needs to forward)
-resource "aws_vpc_security_group_egress_rule" "nat_to_internet" {
-  security_group_id = aws_security_group.nat_instance.id
-
-  description = "Allow all outbound to internet"
-  ip_protocol = "-1"
-  cidr_ipv4   = "0.0.0.0/0"
-
-  tags = {
-    Name = "nat-to-internet"
+    Name = "nat-gateway-eip-nonprod"
   }
 }
 
 # =============================================================================
-# NAT Instance
+# NAT Gateway (Managed by AWS - no configuration needed)
 # =============================================================================
 
-resource "aws_instance" "nat" {
-  ami                         = data.aws_ami.amazon_linux_2023_arm.id
-  instance_type               = var.nat_instance_type
-  subnet_id                   = local.public_subnet_az1_id
-  associate_public_ip_address = true
-  source_dest_check           = false # Required for NAT instance
-
-  vpc_security_group_ids = [aws_security_group.nat_instance.id]
-
-  # User data to enable IP forwarding and NAT
-  user_data = <<-EOF
-    #!/bin/bash
-    set -e
-
-    # Enable IP forwarding persistently
-    echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-nat.conf
-    sysctl -p /etc/sysctl.d/99-nat.conf
-
-    # Install iptables (AL2023 uses nftables backend but iptables-nft provides compatibility)
-    dnf install -y iptables-nft iptables-services
-    systemctl enable iptables
-    systemctl start iptables
-
-    # Get the primary network interface
-    ETH=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|ens)' | head -1)
-
-    # Set up NAT rules
-    iptables -t nat -A POSTROUTING -o $ETH -s ${var.vpc_cidr} -j MASQUERADE
-    iptables -A FORWARD -i $ETH -o $ETH -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables -A FORWARD -i $ETH -o $ETH -j ACCEPT
-
-    # Save iptables rules
-    service iptables save
-  EOF
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = local.public_subnet_az1_id
 
   tags = {
-    Name = "nat-instance-nonprod-az1"
+    Name = "nat-gateway-nonprod"
   }
 
-  lifecycle {
-    ignore_changes = [ami] # Don't replace on AMI updates
-  }
+  # Ensure IGW exists before creating NAT Gateway
+  depends_on = [data.terraform_remote_state.vpc]
 }
 
 # =============================================================================
-# Route Table Updates - Add NAT route to az1 non-prod private subnets
+# Route Table Updates - Add NAT route to nonprod private subnets
 # =============================================================================
 
 resource "aws_route" "private_nat" {
@@ -204,7 +115,7 @@ resource "aws_route" "private_nat" {
 
   route_table_id         = each.value
   destination_cidr_block = "0.0.0.0/0"
-  network_interface_id   = aws_instance.nat.primary_network_interface_id
+  nat_gateway_id         = aws_nat_gateway.main.id
 }
 
 # =============================================================================
@@ -213,7 +124,7 @@ resource "aws_route" "private_nat" {
 
 resource "aws_vpc_endpoint" "s3_gateway" {
   vpc_id            = local.vpc_id
-  service_name      = "com.amazonaws.us-west-2.s3"
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
   vpc_endpoint_type = "Gateway"
 
   route_table_ids = local.all_route_table_ids
