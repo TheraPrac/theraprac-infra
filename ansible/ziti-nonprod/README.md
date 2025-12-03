@@ -2,6 +2,38 @@
 
 Installs and configures OpenZiti controller + router on the nonprod EC2 instance.
 
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Internet                                 │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                       ┌───────▼───────┐
+                       │   NLB (TCP)   │   ← TCP Passthrough (critical!)
+                       │  Port 443     │
+                       └───────┬───────┘
+                               │
+┌──────────────────────────────┼──────────────────────────────────┐
+│  Private Subnet              │                                   │
+│  ┌───────────────────────────▼────────────────────────────────┐ │
+│  │                 Ziti EC2 Instance                          │ │
+│  │  ┌─────────────────┐  ┌─────────────────┐                  │ │
+│  │  │  Controller     │  │    Router       │                  │ │
+│  │  │  Port 443       │  │  Port 8442      │                  │ │
+│  │  │  Port 6262(ctrl)│  │                 │                  │ │
+│  │  └─────────────────┘  └─────────────────┘                  │ │
+│  │  ┌─────────────────┐                                       │ │
+│  │  │  Healthcheck    │                                       │ │
+│  │  │  Port 8080      │                                       │ │
+│  │  └─────────────────┘                                       │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**IMPORTANT**: The NLB must use **TCP passthrough** (not TLS termination).
+Router enrollment requires the controller's actual TLS certificate to verify JWTs.
+
 ## Prerequisites
 
 1. **Terraform Phase 4 applied** - The Ziti EC2 instance must exist:
@@ -15,84 +47,105 @@ Installs and configures OpenZiti controller + router on the nonprod EC2 instance
    aws sso login --profile jfinlinson_admin
    ```
 
-3. **Ansible AWS collection**:
+3. **Ansible with AWS collection**:
    ```bash
    ansible-galaxy collection install amazon.aws
    pip install boto3 botocore
    ```
 
-4. **Session Manager plugin** (macOS):
+4. **SSH access** (via EC2 Instance Connect):
    ```bash
-   brew install session-manager-plugin
+   aws ec2-instance-connect ssh --instance-id i-023506901dab49d56 \
+     --os-user ec2-user --connection-type eice --profile jfinlinson_admin
    ```
 
 ## Usage
 
+### Running the Playbook
+
 ```bash
 cd ansible/ziti-nonprod
-ansible-playbook -i inventory/aws_ssm.yml playbook.yml
+
+# Using static inventory (EC2 Instance Connect)
+ansible-playbook -i inventory.yml playbook.yml
 ```
 
-### Run specific tasks
+### Run Specific Tags
 
 ```bash
-# Install only
-ansible-playbook -i inventory/aws_ssm.yml playbook.yml --tags install
+# Install binary only
+ansible-playbook -i inventory.yml playbook.yml --tags install
 
 # PKI only
-ansible-playbook -i inventory/aws_ssm.yml playbook.yml --tags pki
+ansible-playbook -i inventory.yml playbook.yml --tags pki
 
 # Controller only
-ansible-playbook -i inventory/aws_ssm.yml playbook.yml --tags controller
+ansible-playbook -i inventory.yml playbook.yml --tags controller
+
+# Router only
+ansible-playbook -i inventory.yml playbook.yml --tags router
 ```
 
-## Directory Structure
+## What Gets Created
+
+### Directory Structure on EC2
 
 ```
-ansible/ziti-nonprod/
-├── inventory/
-│   └── aws_ssm.yml          # Dynamic inventory via SSM
-├── playbook.yml             # Main playbook
-├── README.md
-└── roles/
-    └── ziti/
-        ├── defaults/main.yml
-        ├── handlers/main.yml
-        ├── tasks/
-        │   ├── main.yml
-        │   ├── install.yml
-        │   ├── pki.yml
-        │   ├── controller.yml
-        │   ├── router.yml
-        │   ├── healthcheck.yml
-        │   └── systemd.yml
-        └── templates/
-            ├── controller.yaml.j2
-            ├── router.yaml.j2
-            ├── ziti-controller.service.j2
-            ├── ziti-router.service.j2
-            └── healthcheck.service.j2
+/opt/ziti/
+├── bin/
+│   └── ziti                    # Ziti binary (v1.6.9)
+├── pki-ziti/                   # PKI hierarchy
+│   ├── theraprac-root/         # Root CA
+│   ├── theraprac-external-ica/ # External Intermediate
+│   ├── theraprac-network-ica/  # Network Components ICA
+│   ├── theraprac-edge-ica/     # Edge ICA (signs JWTs!)
+│   └── theraprac-sign-ica/     # Signing ICA (enrollment)
+├── db/
+│   └── ctrl.db                 # Controller database
+├── controller/
+│   ├── controller.yaml         # Controller config
+│   └── .admin_password         # Admin password (mode 600)
+├── router/
+│   ├── router.yaml             # Router config
+│   ├── router.cert             # Router cert (from enrollment)
+│   ├── router.key              # Router key
+│   ├── router.server.cert      # Router server cert
+│   └── ca-chain.cert           # CA chain
+├── logs/
+└── healthcheck/
+    └── healthcheck.py          # Simple HTTP 200 responder
 ```
 
-## What Gets Installed
-
-| Component | Location |
-|-----------|----------|
-| Ziti binary | `/opt/ziti/bin/ziti` |
-| PKI certs | `/opt/ziti/pki/` |
-| Controller config | `/opt/ziti/controller/controller.yaml` |
-| Controller DB | `/opt/ziti/controller/ctrl.db` |
-| Admin password | `/opt/ziti/controller/.admin_password` |
-| Router config | `/opt/ziti/router/router.yaml` |
-| Health check | `/opt/ziti/healthcheck/healthcheck.py` |
-
-## Services
+### Services
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| ziti-controller | 443 | Ziti management/client API |
+| ziti-controller | 443, 6262 | Edge API + Control Plane |
 | ziti-router | 8442 | Edge router for SDK clients |
-| healthcheck | 8080 | ALB health check endpoint |
+| healthcheck | 8080 | NLB health check endpoint |
+
+## PKI Architecture
+
+The playbook creates a multi-level CA hierarchy required for Ziti v1.6+:
+
+```
+theraprac-root (Root CA)
+└── theraprac-external-ica (External Intermediate)
+    ├── theraprac-network-ica (Network Components)
+    │   ├── network-server.cert  ← Controller fabric identity
+    │   └── network-client.cert
+    ├── theraprac-edge-ica (Edge)
+    │   ├── edge-server.cert     ← Web identity (signs JWTs!)
+    │   └── edge-client.cert
+    └── theraprac-sign-ica (Signing)
+        └── Used for enrollment signingCert
+```
+
+**Why this structure matters:**
+- Router enrollment fetches the TLS cert from the NLB connection
+- JWT is signed with the web identity key
+- Router verifies JWT signature using the TLS cert's public key
+- If ALB terminates TLS → different cert → signature mismatch → enrollment fails!
 
 ## Variables
 
@@ -100,157 +153,136 @@ Key variables in `roles/ziti/defaults/main.yml`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ziti_install_dir` | `/opt/ziti` | Base installation directory |
-| `ziti_controller_port` | `443` | Controller API port |
+| `ziti_version` | `1.6.9` | Pinned Ziti version |
+| `ziti_install_dir` | `/opt/ziti` | Base directory |
+| `ziti_controller_port` | `443` | Edge API port |
+| `ziti_controller_ctrl_port` | `6262` | Control plane port |
+| `ziti_router_edge_port` | `8442` | Router edge port |
 | `ziti_healthcheck_port` | `8080` | Health check port |
-| `ziti_public_endpoint` | `ziti-nonprod.theraprac.com` | Public DNS name |
-| `ziti_private_dns_name` | `ziti-instance-nonprod.theraprac-internal.com` | Private DNS |
+| `ziti_public_endpoint` | `ziti-nonprod.theraprac.com` | Public DNS |
+
+## Idempotency
+
+The playbook is designed to be run multiple times safely:
+
+- **Binary**: Only downloads if version mismatch
+- **PKI**: Uses `creates:` guards, won't regenerate existing certs
+- **Controller init**: Only runs if `ctrl.db` doesn't exist
+- **Router enrollment**: Only runs if `router.cert` doesn't exist
+- **Templates**: Only restart services on config changes
 
 ## Troubleshooting
 
-### Check service status
-```bash
-# SSH via SSM
-aws ssm start-session --target <instance-id> --profile jfinlinson_admin
+### Check Service Status
 
-# Check services
-systemctl status ziti-controller
-systemctl status ziti-router
-systemctl status healthcheck
+```bash
+# SSH to instance
+aws ec2-instance-connect ssh --instance-id i-023506901dab49d56 \
+  --os-user ec2-user --connection-type eice --profile jfinlinson_admin
+
+# Check all services
+sudo systemctl status ziti-controller ziti-router healthcheck
+
+# View logs
+sudo journalctl -u ziti-controller -f
+sudo journalctl -u ziti-router -f
 ```
 
-### View logs
-```bash
-journalctl -u ziti-controller -f
-journalctl -u ziti-router -f
-```
+### Test Endpoints
 
-### Test health check
 ```bash
+# Health check (on instance)
 curl http://localhost:8080/
+
+# Controller API (from internet)
+curl -sk https://ziti-nonprod.theraprac.com/edge/client/v1/version
 ```
 
-### Get admin password
+### Get Admin Credentials
+
 ```bash
-cat /opt/ziti/controller/.admin_password
+sudo cat /opt/ziti/controller/.admin_password
 ```
+
+### Login to Ziti
+
+```bash
+# On the instance
+ziti edge login https://ziti-nonprod.theraprac.com \
+  --username admin \
+  --password "$(sudo cat /opt/ziti/controller/.admin_password)"
+
+# List identities
+ziti edge list identities
+
+# List routers
+ziti edge list edge-routers
+```
+
+### Router Not Online
+
+If the router shows as offline:
+
+```bash
+# Check router logs
+sudo journalctl -u ziti-router -n 100 --no-pager
+
+# Verify enrollment files exist
+ls -la /opt/ziti/router/
+
+# Re-enroll if needed (DESTRUCTIVE!)
+ziti edge delete edge-router router-nonprod
+ziti edge create edge-router router-nonprod -o /opt/ziti/router/router.jwt
+ziti router enroll /opt/ziti/router/router.yaml --jwt /opt/ziti/router/router.jwt
+sudo systemctl restart ziti-router
+```
+
+## Creating User Identities
+
+```bash
+# Login as admin
+ziti edge login https://ziti-nonprod.theraprac.com --username admin --password <password>
+
+# Create identity
+ziti edge create identity user joe-dev -o joe-dev.jwt
+
+# User enrolls on their machine
+ziti edge enroll joe-dev.jwt -o ~/.config/ziti/identities/joe-dev.json
+```
+
+## Disaster Recovery
+
+### From AMI Backup
+
+An AMI snapshot was created: `ami-0c37299166e468048`
+
+```bash
+# Launch new instance from AMI
+aws ec2 run-instances \
+  --image-id ami-0c37299166e468048 \
+  --instance-type t4g.micro \
+  --subnet-id <private-ziti-subnet-id> \
+  --iam-instance-profile Name=theraprac-ziti-controller-instance-profile \
+  ...
+```
+
+### Fresh Install
+
+1. Apply Terraform Phase 4 to create new EC2
+2. Run Ansible playbook
+3. Recreate user identities (JWTs expire, so users need new ones)
 
 ---
 
-## Ziti Services and Policies
+## Key Files Reference
 
-### Synthetic DNS Names
-
-Ziti uses **synthetic DNS names** for services on the overlay network. These are NOT real DNS records - they only resolve when connected to the Ziti network via `ziti-edge-tunnel`.
-
-**Naming Convention:**
-```
-<function>.<environment>.ziti
-```
-
-| Purpose | Synthetic DNS Name | Description |
-|---------|-------------------|-------------|
-| SSH access | `ssh.ziti-nonprod.ziti` | SSH to the Ziti server |
-| Controller | `controller.ziti-nonprod.ziti` | Controller management (future) |
-| Router | `router.ziti-nonprod.ziti` | Router management (future) |
-| App services | `*.theraprac.com.ziti` | Application dark services (future) |
-
-**Rules:**
-- All dark services end with `.ziti`
-- Environment prefix: `nonprod`, `prod`
-- Subdomain = function: `ssh`, `api`, `db`, etc.
-
-### SSH Service
-
-The SSH service allows authorized Ziti identities to SSH into the nonprod server through the zero-trust overlay network.
-
-**Service Details:**
-- **Name:** `ssh.ziti-nonprod`
-- **Synthetic DNS:** `ssh.ziti-nonprod.ziti`
-- **Backend:** `127.0.0.1:22` (localhost on router)
-- **Access:** Requires `role.ssh` attribute
-
-### Setting Up SSH Service
-
-```bash
-# Login to Ziti controller
-ziti edge login https://ziti-nonprod.theraprac.com --username admin --password <password>
-
-# Run setup scripts
-cd scripts/ziti
-./setup-all.sh
-
-# Or run individually:
-./setup-ssh-service.sh   # Create the service
-./setup-ssh-bind.sh      # Bind policy (router hosts service)
-./setup-ssh-dial.sh      # Dial policy (users access service)
-```
-
-### Creating User Identities
-
-```bash
-# Create user with SSH access
-./create-user.sh joe-dev --ssh
-
-# Create user without SSH (can add later)
-./create-user.sh bob-read
-
-# Grant SSH to existing user
-ziti edge update identity bob-read --role-attributes role.ssh
-```
-
-### Connecting via SSH
-
-**On your local machine:**
-
-1. **Enroll your identity** (one-time):
-   ```bash
-   ziti edge enroll your-name.jwt -o ~/.config/ziti/identities/your-name.json
-   ```
-
-2. **Start the tunnel**:
-   ```bash
-   # macOS/Linux
-   sudo ziti-edge-tunnel run ~/.config/ziti/identities/your-name.json
-   
-   # Or use Ziti Desktop Edge app
-   ```
-
-3. **SSH to the server**:
-   ```bash
-   ssh ec2-user@ssh.ziti-nonprod.ziti
-   ```
-
-### Verifying Configuration
-
-```bash
-# Run verification script
-./verify-ssh-service.sh
-
-# Manual checks
-ziti edge list services | grep ssh
-ziti edge list service-policies | grep ssh
-ziti edge list identities
-```
-
-### Role Attributes
-
-| Attribute | Access |
-|-----------|--------|
-| `role.ssh` | Can SSH to nonprod server |
-| `role.admin` | Admin-level access (future) |
-| `role.dev` | Developer access (future) |
-
-### Troubleshooting SSH Access
-
-**Can't resolve `ssh.ziti-nonprod.ziti`:**
-- Ensure `ziti-edge-tunnel` is running
-- Check your identity has `role.ssh` attribute
-
-**Connection refused:**
-- Verify router is online: `ziti edge list edge-routers`
-- Check bind policy exists: `ziti edge list service-policies | grep bind`
-
-**Permission denied:**
-- Ensure you're using the correct SSH user: `ec2-user`
-- Check SSH key is configured on the server
+| File | Purpose |
+|------|---------|
+| `defaults/main.yml` | All configurable variables |
+| `tasks/install.yml` | Binary installation |
+| `tasks/pki.yml` | PKI hierarchy creation |
+| `tasks/controller.yml` | Controller config + edge init |
+| `tasks/router.yml` | Router config + enrollment |
+| `tasks/systemd.yml` | Service management |
+| `templates/controller.yaml.j2` | Controller config template |
+| `templates/router.yaml.j2` | Router config template |

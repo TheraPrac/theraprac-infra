@@ -1,7 +1,7 @@
 # =============================================================================
 # Ziti Role - Install Tasks
 # =============================================================================
-# Installs Ziti binaries and prerequisites
+# Installs Ziti binaries (pinned version) and prerequisites
 # =============================================================================
 
 ---
@@ -11,7 +11,7 @@
       - unzip
       - tar
       - python3
-      - systemd
+      - jq
     state: present
 
 # curl-minimal is pre-installed on AL2023 and conflicts with curl
@@ -20,13 +20,6 @@
     cmd: which curl
   register: curl_check
   changed_when: false
-  failed_when: false
-
-- name: Install curl if not present
-  ansible.builtin.dnf:
-    name: curl
-    state: present
-  when: curl_check.rc != 0
   failed_when: false
 
 - name: Create Ziti directories
@@ -42,34 +35,48 @@
     - "{{ ziti_pki_dir }}"
     - "{{ ziti_controller_dir }}"
     - "{{ ziti_router_dir }}"
+    - "{{ ziti_db_dir }}"
     - "{{ ziti_log_dir }}"
     - "{{ ziti_healthcheck_dir }}"
 
-- name: Check if Ziti binary exists
-  ansible.builtin.stat:
-    path: "{{ ziti_bin }}"
-  register: ziti_binary_stat
+- name: Check current Ziti version
+  ansible.builtin.command:
+    cmd: "{{ ziti_bin }} version"
+  register: current_ziti_version
+  changed_when: false
+  failed_when: false
 
-- name: Download Ziti ARM64 bundle
+- name: Determine if Ziti needs installation/upgrade
+  ansible.builtin.set_fact:
+    ziti_needs_install: "{{ current_ziti_version.rc != 0 or ('v' + ziti_version) not in current_ziti_version.stdout }}"
+
+- name: Display current vs target version
+  ansible.builtin.debug:
+    msg: |
+      Current: {{ current_ziti_version.stdout | default('not installed') }}
+      Target:  v{{ ziti_version }}
+      Needs install: {{ ziti_needs_install }}
+
+- name: Download Ziti v{{ ziti_version }} ARM64
   ansible.builtin.get_url:
     url: "{{ ziti_download_url }}"
     dest: /tmp/ziti-linux-arm64.tar.gz
     mode: '0644'
-  when: not ziti_binary_stat.stat.exists
+  when: ziti_needs_install
 
 - name: Create temp extraction directory
   ansible.builtin.file:
     path: /tmp/ziti-extract
     state: directory
     mode: '0755'
-  when: not ziti_binary_stat.stat.exists
+  when: ziti_needs_install
 
-- name: Extract Ziti bundle to temp
+- name: Extract Ziti bundle
   ansible.builtin.unarchive:
     src: /tmp/ziti-linux-arm64.tar.gz
     dest: /tmp/ziti-extract
     remote_src: true
-  when: not ziti_binary_stat.stat.exists
+  when: ziti_needs_install
 
 - name: Find ziti binary in extracted files
   ansible.builtin.find:
@@ -78,30 +85,29 @@
     recurse: true
     file_type: file
   register: ziti_found
-  when: not ziti_binary_stat.stat.exists
+  when: ziti_needs_install
 
-- name: Copy ziti binary to install directory
+- name: Install ziti binary
   ansible.builtin.copy:
     src: "{{ ziti_found.files[0].path }}"
     dest: "{{ ziti_bin }}"
     remote_src: true
     mode: '0755'
-  when:
-    - not ziti_binary_stat.stat.exists
-    - ziti_found.files | length > 0
-
-- name: Clean up temp extraction directory
-  ansible.builtin.file:
-    path: /tmp/ziti-extract
-    state: absent
-  when: not ziti_binary_stat.stat.exists
-
-- name: Set Ziti binary permissions
-  ansible.builtin.file:
-    path: "{{ ziti_bin }}"
     owner: root
     group: root
-    mode: '0755'
+  when:
+    - ziti_needs_install
+    - ziti_found.files | length > 0
+  notify: restart ziti-controller
+
+- name: Clean up temp files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/ziti-extract
+    - /tmp/ziti-linux-arm64.tar.gz
+  when: ziti_needs_install
 
 - name: Create symlink to /usr/local/bin
   ansible.builtin.file:
@@ -116,11 +122,6 @@
   register: ziti_version_output
   changed_when: false
 
-- name: Display Ziti version
+- name: Display installed Ziti version
   ansible.builtin.debug:
-    msg: "Ziti version: {{ ziti_version_output.stdout }}"
-
-- name: Clean up downloaded archive
-  ansible.builtin.file:
-    path: /tmp/ziti-linux-arm64.tar.gz
-    state: absent
+    msg: "Installed: {{ ziti_version_output.stdout }}"

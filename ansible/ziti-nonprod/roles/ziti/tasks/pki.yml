@@ -1,13 +1,23 @@
 # =============================================================================
 # Ziti Role - PKI Tasks
 # =============================================================================
-# Creates PKI certificates for Ziti controller and router
+# Creates the full multi-level CA hierarchy required for Ziti v1.6+
+#
+# PKI Structure:
+#   theraprac-root/                 - Root CA
+#   theraprac-external-ica/         - External Intermediate CA
+#   theraprac-network-ica/          - Network Components ICA (controller fabric)
+#   theraprac-edge-ica/             - Edge ICA (web API - signs JWTs!)
+#   theraprac-sign-ica/             - Signing ICA (enrollment)
 # =============================================================================
 
 ---
+# =============================================================================
+# Root CA
+# =============================================================================
 - name: Check if Root CA exists
   ansible.builtin.stat:
-    path: "{{ ziti_pki_dir }}/{{ ziti_pki_ca_name }}/certs/{{ ziti_pki_ca_name }}.cert"
+    path: "{{ ziti_pki_dir }}/{{ ziti_pki_root_ca }}/certs/{{ ziti_pki_root_ca }}.cert"
   register: root_ca_stat
 
 - name: Create Root CA
@@ -15,82 +25,152 @@
     cmd: >
       {{ ziti_bin }} pki create ca
       --pki-root {{ ziti_pki_dir }}
-      --ca-name {{ ziti_pki_ca_name }}
-      --ca-file {{ ziti_pki_ca_name }}
-    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_ca_name }}/certs/{{ ziti_pki_ca_name }}.cert"
+      --ca-name {{ ziti_pki_root_ca }}
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_root_ca }}/certs/{{ ziti_pki_root_ca }}.cert"
   when: not root_ca_stat.stat.exists
 
-- name: Check if Intermediate CA exists
+# =============================================================================
+# External Intermediate CA (signed by Root)
+# =============================================================================
+- name: Check if External ICA exists
   ansible.builtin.stat:
-    path: "{{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_intermediate_name }}.cert"
-  register: intermediate_ca_stat
+    path: "{{ ziti_pki_dir }}/{{ ziti_pki_external_ica }}/certs/{{ ziti_pki_external_ica }}.cert"
+  register: external_ica_stat
 
-- name: Create Intermediate CA
+- name: Create External Intermediate CA
   ansible.builtin.command:
     cmd: >
       {{ ziti_bin }} pki create intermediate
       --pki-root {{ ziti_pki_dir }}
-      --ca-name {{ ziti_pki_ca_name }}
-      --intermediate-name {{ ziti_pki_intermediate_name }}
-      --intermediate-file {{ ziti_pki_intermediate_name }}
-    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_intermediate_name }}.cert"
-  when: not intermediate_ca_stat.stat.exists
+      --ca-name {{ ziti_pki_root_ca }}
+      --intermediate-name {{ ziti_pki_external_ica }}
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_external_ica }}/certs/{{ ziti_pki_external_ica }}.cert"
+  when: not external_ica_stat.stat.exists
 
-- name: Check if Server certificate exists
+# =============================================================================
+# Network Components ICA (for controller fabric identity)
+# =============================================================================
+- name: Check if Network ICA exists
   ansible.builtin.stat:
-    path: "{{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-server.cert"
-  register: server_cert_stat
+    path: "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/certs/{{ ziti_pki_network_ica }}.cert"
+  register: network_ica_stat
 
-- name: Create Server certificate
+- name: Create Network Components ICA
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} pki create intermediate
+      --pki-root {{ ziti_pki_dir }}
+      --ca-name {{ ziti_pki_external_ica }}
+      --intermediate-name {{ ziti_pki_network_ica }}
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/certs/{{ ziti_pki_network_ica }}.cert"
+  when: not network_ica_stat.stat.exists
+
+- name: Create Network server certificate
   ansible.builtin.command:
     cmd: >
       {{ ziti_bin }} pki create server
       --pki-root {{ ziti_pki_dir }}
-      --ca-name {{ ziti_pki_intermediate_name }}
-      --server-name {{ ziti_pki_server_name }}
-      --server-file {{ ziti_pki_server_name }}-server
-      --dns {{ ziti_public_endpoint }},{{ ziti_private_dns_name }},localhost
+      --ca-name {{ ziti_pki_network_ica }}
+      --server-name network-server
+      --dns localhost,{{ ziti_public_endpoint }}
       --ip 127.0.0.1
-    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-server.cert"
-  when: not server_cert_stat.stat.exists
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/certs/network-server.cert"
 
-- name: Check if Client certificate exists
-  ansible.builtin.stat:
-    path: "{{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-client.cert"
-  register: client_cert_stat
-
-- name: Create Client certificate
+- name: Create Network client certificate
   ansible.builtin.command:
     cmd: >
       {{ ziti_bin }} pki create client
       --pki-root {{ ziti_pki_dir }}
-      --ca-name {{ ziti_pki_intermediate_name }}
-      --client-name {{ ziti_pki_server_name }}
-      --client-file {{ ziti_pki_server_name }}-client
-    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-client.cert"
-  when: not client_cert_stat.stat.exists
+      --ca-name {{ ziti_pki_network_ica }}
+      --client-name network-client
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/certs/network-client.cert"
 
+# =============================================================================
+# Edge ICA (for web/edge API - THIS SIGNS THE JWTs!)
+# =============================================================================
+- name: Check if Edge ICA exists
+  ansible.builtin.stat:
+    path: "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/certs/{{ ziti_pki_edge_ica }}.cert"
+  register: edge_ica_stat
+
+- name: Create Edge ICA
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} pki create intermediate
+      --pki-root {{ ziti_pki_dir }}
+      --ca-name {{ ziti_pki_external_ica }}
+      --intermediate-name {{ ziti_pki_edge_ica }}
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/certs/{{ ziti_pki_edge_ica }}.cert"
+  when: not edge_ica_stat.stat.exists
+
+- name: Create Edge server certificate
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} pki create server
+      --pki-root {{ ziti_pki_dir }}
+      --ca-name {{ ziti_pki_edge_ica }}
+      --server-name edge-server
+      --dns localhost,{{ ziti_public_endpoint }}
+      --ip 127.0.0.1
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/certs/edge-server.cert"
+
+- name: Create Edge client certificate
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} pki create client
+      --pki-root {{ ziti_pki_dir }}
+      --ca-name {{ ziti_pki_edge_ica }}
+      --client-name edge-client
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/certs/edge-client.cert"
+
+# =============================================================================
+# Signing ICA (for enrollment signingCert)
+# =============================================================================
+- name: Check if Sign ICA exists
+  ansible.builtin.stat:
+    path: "{{ ziti_pki_dir }}/{{ ziti_pki_sign_ica }}/certs/{{ ziti_pki_sign_ica }}.cert"
+  register: sign_ica_stat
+
+- name: Create Signing ICA
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} pki create intermediate
+      --pki-root {{ ziti_pki_dir }}
+      --ca-name {{ ziti_pki_external_ica }}
+      --intermediate-name {{ ziti_pki_sign_ica }}
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_sign_ica }}/certs/{{ ziti_pki_sign_ica }}.cert"
+  when: not sign_ica_stat.stat.exists
+
+# =============================================================================
+# Create CA Chain Files (required for controller config)
+# =============================================================================
+- name: Create Network ICA full CA chain
+  ansible.builtin.shell: |
+    cat "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/certs/{{ ziti_pki_network_ica }}.chain.pem" \
+        "{{ ziti_pki_dir }}/{{ ziti_pki_external_ica }}/certs/{{ ziti_pki_external_ica }}.chain.pem" \
+        "{{ ziti_pki_dir }}/{{ ziti_pki_root_ca }}/certs/{{ ziti_pki_root_ca }}.cert" \
+        > "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/cas-full.pem"
+  args:
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/cas-full.pem"
+
+- name: Create Edge ICA full CA chain
+  ansible.builtin.shell: |
+    cat "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/certs/{{ ziti_pki_edge_ica }}.chain.pem" \
+        "{{ ziti_pki_dir }}/{{ ziti_pki_external_ica }}/certs/{{ ziti_pki_external_ica }}.chain.pem" \
+        "{{ ziti_pki_dir }}/{{ ziti_pki_root_ca }}/certs/{{ ziti_pki_root_ca }}.cert" \
+        > "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/edge.cas-full.pem"
+  args:
+    creates: "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/edge.cas-full.pem"
+
+# =============================================================================
+# Set Permissions
+# =============================================================================
 - name: Set PKI directory ownership
   ansible.builtin.file:
     path: "{{ ziti_pki_dir }}"
     owner: root
     group: root
     recurse: true
-
-- name: Find all certificate files
-  ansible.builtin.find:
-    paths: "{{ ziti_pki_dir }}"
-    patterns: "*.cert"
-    recurse: true
-  register: cert_files
-
-- name: Set certificate permissions (644)
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    mode: '0644'
-  loop: "{{ cert_files.files }}"
-  loop_control:
-    label: "{{ item.path | basename }}"
 
 - name: Find all key files
   ansible.builtin.find:
@@ -109,10 +189,10 @@
 
 - name: Display PKI structure
   ansible.builtin.command:
-    cmd: find {{ ziti_pki_dir }} -type f \( -name "*.cert" -o -name "*.key" \)
+    cmd: find {{ ziti_pki_dir }} -type f \( -name "*.cert" -o -name "*.pem" \) | sort
   register: pki_files
   changed_when: false
 
-- name: Show PKI files
+- name: Show PKI files created
   ansible.builtin.debug:
     msg: "{{ pki_files.stdout_lines }}"

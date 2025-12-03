@@ -1,10 +1,18 @@
 # =============================================================================
 # Ziti Role - Controller Tasks
 # =============================================================================
-# Configures the Ziti controller
+# Configures and initializes the Ziti controller
 # =============================================================================
 
 ---
+- name: Create database directory
+  ansible.builtin.file:
+    path: "{{ ziti_db_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
 - name: Deploy controller configuration
   ansible.builtin.template:
     src: controller.yaml.j2
@@ -16,36 +24,68 @@
 
 - name: Check if controller database exists
   ansible.builtin.stat:
-    path: "{{ ziti_controller_dir }}/ctrl.db"
+    path: "{{ ziti_db_dir }}/ctrl.db"
   register: controller_db_stat
 
-- name: Generate admin password
+- name: Generate admin password (new install only)
   ansible.builtin.set_fact:
-    ziti_admin_password: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=32') }}"
+    ziti_admin_password: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=24') }}"
   when: not controller_db_stat.stat.exists
 
-- name: Initialize controller
-  ansible.builtin.command:
-    cmd: >
-      {{ ziti_bin }} controller edge init
-      {{ ziti_controller_dir }}/controller.yaml
-      --username {{ ziti_admin_user }}
-      --password "{{ ziti_admin_password }}"
-    creates: "{{ ziti_controller_dir }}/ctrl.db"
-  when: not controller_db_stat.stat.exists
-  register: controller_init
-  no_log: true
-
-- name: Save admin password to file
+- name: Save admin password before init
   ansible.builtin.copy:
     content: "{{ ziti_admin_password }}"
     dest: "{{ ziti_admin_password_file }}"
     owner: root
     group: root
     mode: '0600'
-  when: controller_init is changed
+  when: not controller_db_stat.stat.exists
   no_log: true
 
+# Must start controller service before edge init
+- name: Ensure controller systemd unit exists
+  ansible.builtin.template:
+    src: ziti-controller.service.j2
+    dest: /etc/systemd/system/ziti-controller.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Start controller for initialization
+  ansible.builtin.systemd:
+    name: ziti-controller
+    state: started
+  when: not controller_db_stat.stat.exists
+
+- name: Wait for controller to be listening
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ ziti_controller_port }}"
+    timeout: 60
+  when: not controller_db_stat.stat.exists
+
+- name: Initialize Ziti Edge (creates admin identity)
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} controller edge init
+      {{ ziti_controller_dir }}/controller.yaml
+      --username {{ ziti_admin_user }}
+      --password "{{ ziti_admin_password }}"
+  when: not controller_db_stat.stat.exists
+  register: controller_init
+  no_log: true
+
+- name: Restart controller after edge init
+  ansible.builtin.systemd:
+    name: ziti-controller
+    state: restarted
+  when: controller_init is changed
+
+# For existing installations, read the saved password
 - name: Read admin password from file
   ansible.builtin.slurp:
     src: "{{ ziti_admin_password_file }}"
@@ -58,6 +98,9 @@
   when: controller_db_stat.stat.exists
   no_log: true
 
-- name: Display admin credentials location
+- name: Display controller info
   ansible.builtin.debug:
-    msg: "Admin password stored at: {{ ziti_admin_password_file }}"
+    msg: |
+      Controller initialized!
+      Admin password stored at: {{ ziti_admin_password_file }}
+      Public endpoint: https://{{ ziti_public_endpoint }}

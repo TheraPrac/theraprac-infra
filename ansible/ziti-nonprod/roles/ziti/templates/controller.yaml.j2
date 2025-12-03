@@ -2,72 +2,90 @@
 # Ziti Controller Configuration
 # =============================================================================
 # Managed by Ansible - DO NOT EDIT MANUALLY
+# Template: controller.yaml.j2
 # =============================================================================
 
 v: 3
 
-# Database
-db: {{ ziti_controller_dir }}/ctrl.db
+# Database location
+db: {{ ziti_db_dir }}/ctrl.db
 
-# Controller identity (PKI)
+# =============================================================================
+# Controller Identity (for fabric/ctrl plane communication)
+# Uses Network ICA certificates
+# =============================================================================
 identity:
-  cert: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-server.cert
-  server_cert: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-server.cert
-  key: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/keys/{{ ziti_pki_server_name }}-server.key
-  ca: {{ ziti_pki_dir }}/{{ ziti_pki_ca_name }}/certs/{{ ziti_pki_ca_name }}.cert
+  cert:        "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/certs/network-client.cert"
+  server_cert: "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/certs/network-server.chain.pem"
+  key:         "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/keys/network-server.key"
+  ca:          "{{ ziti_pki_dir }}/{{ ziti_pki_network_ica }}/cas-full.pem"
 
-# Control plane listener (for routers)
+# =============================================================================
+# Control Plane (router connections)
+# =============================================================================
 ctrl:
-  listener: tls:127.0.0.1:6262
   options:
-    advertiseAddress: tls:{{ ziti_private_dns_name }}:6262
+    advertiseAddress: tls:localhost:{{ ziti_controller_ctrl_port }}
+  listener: tls:0.0.0.0:{{ ziti_controller_ctrl_port }}
 
-# Health checks
+# =============================================================================
+# Health Checks
+# =============================================================================
 healthChecks:
   boltCheck:
     interval: 30s
     timeout: 20s
     initialDelay: 30s
 
-# Edge configuration
+# =============================================================================
+# Edge Configuration
+# =============================================================================
 edge:
-  # API configuration (required for edge init)
   api:
-    activityUpdateInterval: 90s
-    activityUpdateBatchSize: 250
     sessionTimeout: 30m
-    address: {{ ziti_public_endpoint }}:443
-  # Enrollment configuration
+    address: {{ ziti_public_endpoint }}:{{ ziti_controller_port }}
+  
+  # Signing certificate for enrollment (uses Sign ICA)
   enrollment:
     signingCert:
-      cert: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_intermediate_name }}.cert
-      key: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/keys/{{ ziti_pki_intermediate_name }}.key
+      cert: {{ ziti_pki_dir }}/{{ ziti_pki_sign_ica }}/certs/{{ ziti_pki_sign_ica }}.chain.pem
+      key:  {{ ziti_pki_dir }}/{{ ziti_pki_sign_ica }}/keys/{{ ziti_pki_sign_ica }}.key
     edgeIdentity:
       duration: 180m
     edgeRouter:
       duration: 180m
 
-# Web API listeners
+# =============================================================================
+# Web API Listeners
+# =============================================================================
 web:
   - name: client-management
     bindPoints:
       - interface: {{ ziti_controller_host }}:{{ ziti_controller_port }}
-        address: {{ ziti_public_endpoint }}:443
+        address: {{ ziti_public_endpoint }}:{{ ziti_controller_port }}
+    
+    # Web identity uses Edge ICA - THIS IS CRITICAL!
+    # The Edge ICA's server cert signs the enrollment JWTs.
+    # Routers verify JWTs by fetching this TLS cert during enrollment.
     identity:
-      cert: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-server.cert
-      server_cert: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/certs/{{ ziti_pki_server_name }}-server.cert
-      key: {{ ziti_pki_dir }}/{{ ziti_pki_intermediate_name }}/keys/{{ ziti_pki_server_name }}-server.key
-      ca: {{ ziti_pki_dir }}/{{ ziti_pki_ca_name }}/certs/{{ ziti_pki_ca_name }}.cert
+      ca:          "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/edge.cas-full.pem"
+      key:         "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/keys/edge-server.key"
+      server_cert: "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/certs/edge-server.chain.pem"
+      cert:        "{{ ziti_pki_dir }}/{{ ziti_pki_edge_ica }}/certs/edge-client.cert"
+    
     options:
       idleTimeout: 5000ms
       readTimeout: 5000ms
       writeTimeout: 100000ms
       minTLSVersion: TLS1.2
       maxTLSVersion: TLS1.3
+    
     apis:
       - binding: edge-management
         options: {}
       - binding: edge-client
         options: {}
       - binding: fabric
+        options: {}
+      - binding: edge-oidc
         options: {}

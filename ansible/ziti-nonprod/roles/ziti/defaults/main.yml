@@ -1,26 +1,31 @@
 # =============================================================================
 # Ziti Role - Default Variables
 # =============================================================================
+# These variables configure the Ziti controller and router deployment.
+# Override in playbook or inventory as needed.
+# =============================================================================
+
+# Ziti version - pin to specific version for reproducibility
+ziti_version: "1.6.9"
+ziti_download_url: "https://github.com/openziti/ziti/releases/download/v{{ ziti_version }}/ziti-linux-arm64-v{{ ziti_version }}.tar.gz"
 
 # Installation directories
 ziti_install_dir: /opt/ziti
 ziti_bin_dir: "{{ ziti_install_dir }}/bin"
-ziti_pki_dir: "{{ ziti_install_dir }}/pki"
+ziti_pki_dir: "{{ ziti_install_dir }}/pki-ziti"
 ziti_controller_dir: "{{ ziti_install_dir }}/controller"
 ziti_router_dir: "{{ ziti_install_dir }}/router"
+ziti_db_dir: "{{ ziti_install_dir }}/db"
 ziti_log_dir: "{{ ziti_install_dir }}/logs"
 ziti_healthcheck_dir: "{{ ziti_install_dir }}/healthcheck"
 
 # Ziti binary path
 ziti_bin: "{{ ziti_bin_dir }}/ziti"
 
-# Download URL for ARM64 (latest stable)
-ziti_download_url: "https://get.openziti.io/latest/arm64"
-
 # Network configuration
 ziti_controller_host: "0.0.0.0"
 ziti_controller_port: 443
-ziti_controller_mgmt_port: 8441
+ziti_controller_ctrl_port: 6262
 ziti_router_edge_port: 8442
 ziti_healthcheck_port: 8080
 
@@ -28,21 +33,38 @@ ziti_healthcheck_port: 8080
 ziti_public_endpoint: "ziti-nonprod.theraprac.com"
 ziti_private_dns_name: "ziti-instance-nonprod.theraprac-internal.com"
 
-# PKI configuration
-ziti_pki_ca_name: "ziti-ca"
-ziti_pki_intermediate_name: "ziti-intermediate"
-ziti_pki_server_name: "ziti-server"
+# =============================================================================
+# PKI Configuration - Multi-Level CA Hierarchy
+# =============================================================================
+# The PKI structure follows OpenZiti best practices with separate ICAs:
+#   - Root CA (theraprac-root)
+#   - External ICA (theraprac-external-ica) - intermediate under root
+#   - Network ICA (theraprac-network-ica) - for controller fabric identity
+#   - Edge ICA (theraprac-edge-ica) - for web/edge API identity (signs JWTs!)
+#   - Sign ICA (theraprac-sign-ica) - for enrollment signingCert
+# =============================================================================
+
+# CA names
+ziti_pki_root_ca: "theraprac-root"
+ziti_pki_external_ica: "theraprac-external-ica"
+ziti_pki_network_ica: "theraprac-network-ica"
+ziti_pki_edge_ica: "theraprac-edge-ica"
+ziti_pki_sign_ica: "theraprac-sign-ica"
+
+# Certificate subject info
 ziti_pki_country: "US"
-ziti_pki_state: "Utah"
+ziti_pki_province: "UT"
 ziti_pki_locality: "Salt Lake City"
 ziti_pki_org: "TheraPrac"
 ziti_pki_org_unit: "Infrastructure"
 
-# Controller configuration
-ziti_controller_identity_name: "controller"
+# =============================================================================
+# Controller Configuration
+# =============================================================================
 ziti_admin_user: "admin"
 ziti_admin_password_file: "{{ ziti_controller_dir }}/.admin_password"
 
-# Router configuration
+# =============================================================================
+# Router Configuration
+# =============================================================================
 ziti_router_name: "router-nonprod"
-ziti_router_identity_name: "router"
