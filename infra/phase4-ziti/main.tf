@@ -238,6 +238,18 @@ resource "aws_vpc_security_group_ingress_rule" "ziti_https_from_nlb" {
   tags = { Name = "ziti-https-from-nlb" }
 }
 
+# Ziti inbound: 8442 from anywhere (Router edge listener for SDK/tunnel data)
+resource "aws_vpc_security_group_ingress_rule" "ziti_router_edge_from_nlb" {
+  security_group_id = aws_security_group.ziti.id
+  description       = "Allow router edge port via NLB (TCP passthrough)"
+  ip_protocol       = "tcp"
+  from_port         = 8442
+  to_port           = 8442
+  cidr_ipv4         = "0.0.0.0/0"
+
+  tags = { Name = "ziti-router-edge-from-nlb" }
+}
+
 # Ziti inbound: 8080 from VPC (NLB health checks)
 resource "aws_vpc_security_group_ingress_rule" "ziti_health_from_nlb" {
   security_group_id = aws_security_group.ziti.id
@@ -372,7 +384,7 @@ resource "aws_lb_target_group_attachment" "ziti" {
   port             = 443
 }
 
-# TCP Listener (passthrough - no TLS termination)
+# TCP Listener for Controller (port 443 - passthrough, no TLS termination)
 resource "aws_lb_listener" "tcp" {
   load_balancer_arn = aws_lb.ziti.arn
   port              = "443"
@@ -385,6 +397,63 @@ resource "aws_lb_listener" "tcp" {
 
   tags = {
     Name = "ziti-${var.environment}-tcp"
+  }
+}
+
+# =============================================================================
+# Router Edge Port (8442) - For SDK/Tunnel Data Connections
+# =============================================================================
+# ZDE (Ziti Desktop Edge) connects to the controller (443) for enrollment and
+# service discovery, but actual data traffic flows through the router (8442).
+# Without exposing port 8442, ZDE can see services but cannot send data.
+# =============================================================================
+
+# Target Group for Router Edge (TCP passthrough to port 8442)
+resource "aws_lb_target_group" "ziti_router" {
+  name_prefix = "zrtr-"
+  port        = 8442
+  protocol    = "TCP"
+  vpc_id      = local.vpc_id
+  target_type = "instance"
+
+  health_check {
+    enabled             = true
+    port                = "8442"
+    protocol            = "TCP"
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    interval            = 30
+  }
+
+  tags = {
+    Name = "ziti-router-${var.environment}-tcp-tg"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Register EC2 with router target group
+resource "aws_lb_target_group_attachment" "ziti_router" {
+  target_group_arn = aws_lb_target_group.ziti_router.arn
+  target_id        = aws_instance.ziti.id
+  port             = 8442
+}
+
+# TCP Listener for Router Edge (port 8442 - passthrough)
+resource "aws_lb_listener" "router_edge" {
+  load_balancer_arn = aws_lb.ziti.arn
+  port              = "8442"
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.ziti_router.arn
+  }
+
+  tags = {
+    Name = "ziti-router-${var.environment}-tcp"
   }
 }
 
