@@ -526,6 +526,42 @@ resource "aws_vpc_security_group_egress_rule" "eice_to_ziti" {
   tags = { Name = "eice-to-ziti-ssh" }
 }
 
+# EICE outbound to app subnets (nonprod) - for basic servers
+resource "aws_vpc_security_group_egress_rule" "eice_to_app_nonprod" {
+  security_group_id = aws_security_group.eice.id
+  description       = "Allow SSH to nonprod app subnet"
+  ip_protocol       = "tcp"
+  from_port         = 22
+  to_port           = 22
+  cidr_ipv4         = "10.20.10.0/24"  # private-app-nonprod-az1
+
+  tags = { Name = "eice-to-app-nonprod-ssh" }
+}
+
+# EICE outbound to app subnets (prod) - for basic servers
+resource "aws_vpc_security_group_egress_rule" "eice_to_app_prod" {
+  security_group_id = aws_security_group.eice.id
+  description       = "Allow SSH to prod app subnet"
+  ip_protocol       = "tcp"
+  from_port         = 22
+  to_port           = 22
+  cidr_ipv4         = "10.20.50.0/24"  # private-app-prod-az1
+
+  tags = { Name = "eice-to-app-prod-ssh" }
+}
+
+# EICE outbound to db subnets (nonprod) - for basic servers
+resource "aws_vpc_security_group_egress_rule" "eice_to_db_nonprod" {
+  security_group_id = aws_security_group.eice.id
+  description       = "Allow SSH to nonprod db subnet"
+  ip_protocol       = "tcp"
+  from_port         = 22
+  to_port           = 22
+  cidr_ipv4         = "10.20.20.0/24"  # private-db-nonprod-az1
+
+  tags = { Name = "eice-to-db-nonprod-ssh" }
+}
+
 # Ziti instance inbound from EICE
 resource "aws_vpc_security_group_ingress_rule" "ziti_from_eice" {
   security_group_id            = aws_security_group.ziti.id

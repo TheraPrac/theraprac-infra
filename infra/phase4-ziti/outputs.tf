@@ -118,6 +118,11 @@ output "eice_dns_name" {
   value       = aws_ec2_instance_connect_endpoint.main.dns_name
 }
 
+output "eice_security_group_id" {
+  description = "Security group ID of EC2 Instance Connect Endpoint"
+  value       = aws_security_group.eice.id
+}
+
 output "ssh_command" {
   description = "Command to SSH into the Ziti instance via EICE"
   value       = "aws ec2-instance-connect ssh --instance-id ${aws_instance.ziti.id} --os-user ec2-user --connection-type eice"

@@ -292,6 +292,74 @@ AMI snapshots are created periodically. To restore:
 2. Run Ansible playbook: `./run-playbook.sh`
 3. Recreate user identities (JWTs expire, so users need new ones)
 
+## Basic Server Provisioning
+
+New servers can be provisioned with Ziti SSH access using the basic server pattern.
+
+### Naming Convention
+
+| Element | Example | Description |
+|---------|---------|-------------|
+| Name | `app` | Server purpose |
+| Role | `mt` | Specific identifier/team |
+| Tier | `app` | Subnet tier: app, db, or ziti |
+| Environment | `nonprod` | Environment |
+| **Full Name** | `app.mt.nonprod` | Combined identifier |
+| **Subnet** | `private-app-nonprod-az1` | Derived from tier + env |
+| **Internal DNS** | `app-mt-nonprod.theraprac-internal.com` | VPC-internal |
+| **Ziti SSH** | `ssh.app.mt.nonprod.ziti` | Synthetic DNS for Ziti |
+
+### Provisioning a New Server
+
+```bash
+# Run the provisioning script
+./scripts/provision-basic-server.sh
+
+# Prompts:
+#   Name: app
+#   Role: mt
+#   Tier: app
+#   Environment: nonprod
+#   Instance type: t4g.micro
+#   Architecture: arm64
+
+# After completion, SSH via Ziti:
+ssh jfinlinson@ssh.app.mt.nonprod.ziti
+```
+
+### How It Works
+
+1. **Terraform** creates the EC2 instance with:
+   - Private subnet (no public IP)
+   - Security group allowing SSH from EICE and Ziti router only
+   - `ansible` and `jfinlinson` users created via user_data
+   - Private DNS record in `theraprac-internal.com`
+
+2. **Ansible** registers the Ziti SSH service:
+   - Creates `host.v1` config pointing to internal DNS
+   - Creates `intercept.v1` config with synthetic DNS
+   - Creates service with `#ssh-services` role attribute
+   - Existing `ssh-bind` and `ssh-dial` policies auto-apply
+
+### Verify joe-dev Has SSH Access
+
+```bash
+# Check joe-dev's role attributes
+ziti edge list identities 'name="joe-dev"'
+
+# If missing ssh-users, update:
+ziti edge update identity joe-dev --role-attributes users,developers,ssh-users
+```
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `infra/modules/basic-server/` | Reusable Terraform module |
+| `infra/phase7-basic-server/` | Terraform config for basic servers |
+| `scripts/provision-basic-server.sh` | Interactive provisioning script |
+| `ansible/basic-server/playbook.yml` | Registers Ziti SSH service |
+
 ## Key Files Reference
 
 | File | Purpose |
