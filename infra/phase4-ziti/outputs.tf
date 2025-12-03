@@ -26,7 +26,7 @@ output "ziti_ec2_private_dns" {
 # =============================================================================
 
 output "ziti_public_url" {
-  description = "Public URL to access Ziti controller (via ALB)"
+  description = "Public URL to access Ziti controller (via NLB TCP passthrough)"
   value       = "https://${var.ziti_public_domain}"
 }
 
@@ -55,30 +55,32 @@ output "internal_zone_id" {
 }
 
 # =============================================================================
-# Load Balancer
+# Load Balancer (NLB with TCP Passthrough)
 # =============================================================================
 
-output "ziti_alb_dns_name" {
-  description = "DNS name of the Application Load Balancer"
+output "ziti_nlb_dns_name" {
+  description = "DNS name of the Network Load Balancer"
   value       = aws_lb.ziti.dns_name
 }
 
-output "ziti_alb_arn" {
-  description = "ARN of the Application Load Balancer"
+output "ziti_nlb_arn" {
+  description = "ARN of the Network Load Balancer"
   value       = aws_lb.ziti.arn
 }
 
-output "ziti_alb_zone_id" {
-  description = "Zone ID of the Application Load Balancer"
+output "ziti_nlb_zone_id" {
+  description = "Zone ID of the Network Load Balancer"
   value       = aws_lb.ziti.zone_id
 }
 
 # =============================================================================
-# Certificate
+# Certificate (not used by NLB - kept for potential future use)
 # =============================================================================
+# NOTE: With NLB TCP passthrough, the controller presents its own TLS cert.
+# The ACM certificate is retained but not attached to the load balancer.
 
 output "acm_certificate_arn" {
-  description = "ARN of the ACM certificate"
+  description = "ARN of the ACM certificate (not used by NLB)"
   value       = aws_acm_certificate.ziti.arn
 }
 
@@ -90,11 +92,7 @@ output "acm_certificate_domain" {
 # =============================================================================
 # Security Groups
 # =============================================================================
-
-output "alb_security_group_id" {
-  description = "Security group ID for the ALB"
-  value       = aws_security_group.alb.id
-}
+# NOTE: NLB does not use security groups - only the EC2 instance has one
 
 output "ziti_security_group_id" {
   description = "Security group ID for the Ziti instance"

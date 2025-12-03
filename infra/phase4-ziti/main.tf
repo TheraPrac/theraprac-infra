@@ -207,55 +207,11 @@ resource "aws_acm_certificate_validation" "ziti" {
 # =============================================================================
 # Security Groups
 # =============================================================================
-
-# -----------------------------------------------------------------------------
-# ALB Security Group (ziti-alb-sg)
-# -----------------------------------------------------------------------------
-resource "aws_security_group" "alb" {
-  name        = "ziti-alb-${var.environment}"
-  description = "Security group for Ziti ALB"
-  vpc_id      = local.vpc_id
-
-  tags = {
-    Name = "ziti-alb-${var.environment}"
-  }
-}
-
-# ALB inbound: HTTPS from internet
-resource "aws_vpc_security_group_ingress_rule" "alb_https" {
-  security_group_id = aws_security_group.alb.id
-  description       = "Allow HTTPS from internet"
-  ip_protocol       = "tcp"
-  from_port         = 443
-  to_port           = 443
-  cidr_ipv4         = "0.0.0.0/0"
-
-  tags = { Name = "alb-https-inbound" }
-}
-
-# ALB outbound: to Ziti EC2 on 443 (HTTPS traffic)
-resource "aws_vpc_security_group_egress_rule" "alb_to_ziti_https" {
-  security_group_id            = aws_security_group.alb.id
-  description                  = "Allow HTTPS to Ziti instance"
-  ip_protocol                  = "tcp"
-  from_port                    = 443
-  to_port                      = 443
-  referenced_security_group_id = aws_security_group.ziti.id
-
-  tags = { Name = "alb-to-ziti-https" }
-}
-
-# ALB outbound: to Ziti EC2 on 8080 (health check)
-resource "aws_vpc_security_group_egress_rule" "alb_to_ziti_health" {
-  security_group_id            = aws_security_group.alb.id
-  description                  = "Allow health check to Ziti instance"
-  ip_protocol                  = "tcp"
-  from_port                    = 8080
-  to_port                      = 8080
-  referenced_security_group_id = aws_security_group.ziti.id
-
-  tags = { Name = "alb-to-ziti-health" }
-}
+# NOTE: NLB does not use security groups. Traffic filtering happens at the
+# target (EC2 instance) level. The EC2 security group must allow:
+#   - Port 443 from 0.0.0.0/0 (NLB forwards client IPs or uses its own)
+#   - Port 8080 from VPC CIDR (NLB health checks come from within VPC)
+# =============================================================================
 
 # -----------------------------------------------------------------------------
 # Ziti EC2 Security Group (ziti-ec2-sg)
@@ -270,28 +226,28 @@ resource "aws_security_group" "ziti" {
   }
 }
 
-# Ziti inbound: 443 from ALB only
-resource "aws_vpc_security_group_ingress_rule" "ziti_https_from_alb" {
-  security_group_id            = aws_security_group.ziti.id
-  description                  = "Allow HTTPS from ALB"
-  ip_protocol                  = "tcp"
-  from_port                    = 443
-  to_port                      = 443
-  referenced_security_group_id = aws_security_group.alb.id
+# Ziti inbound: 443 from anywhere (NLB TCP passthrough preserves client IP)
+resource "aws_vpc_security_group_ingress_rule" "ziti_https_from_nlb" {
+  security_group_id = aws_security_group.ziti.id
+  description       = "Allow HTTPS via NLB (TCP passthrough)"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  cidr_ipv4         = "0.0.0.0/0"
 
-  tags = { Name = "ziti-https-from-alb" }
+  tags = { Name = "ziti-https-from-nlb" }
 }
 
-# Ziti inbound: 8080 from ALB only (health check)
-resource "aws_vpc_security_group_ingress_rule" "ziti_health_from_alb" {
-  security_group_id            = aws_security_group.ziti.id
-  description                  = "Allow health check from ALB"
-  ip_protocol                  = "tcp"
-  from_port                    = 8080
-  to_port                      = 8080
-  referenced_security_group_id = aws_security_group.alb.id
+# Ziti inbound: 8080 from VPC (NLB health checks)
+resource "aws_vpc_security_group_ingress_rule" "ziti_health_from_nlb" {
+  security_group_id = aws_security_group.ziti.id
+  description       = "Allow health check from NLB"
+  ip_protocol       = "tcp"
+  from_port         = 8080
+  to_port           = 8080
+  cidr_ipv4         = local.vpc_cidr
 
-  tags = { Name = "ziti-health-from-alb" }
+  tags = { Name = "ziti-health-from-nlb" }
 }
 
 # Ziti outbound: all traffic to 0.0.0.0/0 via NAT Gateway
@@ -357,45 +313,55 @@ resource "aws_route53_record" "ziti_private" {
 }
 
 # =============================================================================
-# Application Load Balancer
+# Network Load Balancer (TCP Passthrough)
+# =============================================================================
+# IMPORTANT: We use NLB with TCP passthrough instead of ALB with HTTPS termination.
+# This is REQUIRED for Ziti enrollment to work correctly because:
+#   1. The router connects to the controller URL and fetches the TLS server cert
+#   2. The router uses that cert's public key to verify the enrollment JWT
+#   3. If ALB terminates TLS, the router gets the ACM cert (wrong key!)
+#   4. With NLB TCP passthrough, the controller presents its own TLS cert directly
 # =============================================================================
 
 resource "aws_lb" "ziti" {
   name               = "ziti-${var.environment}"
   internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
+  load_balancer_type = "network"
   subnets            = local.public_subnet_ids
 
+  # NLB doesn't use security groups - traffic filtering happens at target level
   enable_deletion_protection = false
 
   tags = {
-    Name = "ziti-${var.environment}-alb"
+    Name = "ziti-${var.environment}-nlb"
   }
 }
 
-# Target Group
+# Target Group (TCP passthrough to port 443)
+# NOTE: Using name_prefix to allow seamless replacement
 resource "aws_lb_target_group" "ziti" {
-  name        = "ziti-${var.environment}-tg"
+  name_prefix = "ziti-"
   port        = 443
-  protocol    = "HTTPS"
+  protocol    = "TCP"
   vpc_id      = local.vpc_id
   target_type = "instance"
 
+  # NLB health check - TCP to port 8080 (healthcheck endpoint)
   health_check {
     enabled             = true
-    path                = "/"
     port                = "8080"
-    protocol            = "HTTP"
+    protocol            = "TCP"
     healthy_threshold   = 2
-    unhealthy_threshold = 3
-    timeout             = 5
+    unhealthy_threshold = 2
     interval            = 30
-    matcher             = "200"
   }
 
   tags = {
-    Name = "ziti-${var.environment}-tg"
+    Name = "ziti-${var.environment}-tcp-tg"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -406,13 +372,11 @@ resource "aws_lb_target_group_attachment" "ziti" {
   port             = 443
 }
 
-# HTTPS Listener
-resource "aws_lb_listener" "https" {
+# TCP Listener (passthrough - no TLS termination)
+resource "aws_lb_listener" "tcp" {
   load_balancer_arn = aws_lb.ziti.arn
   port              = "443"
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate_validation.ziti.certificate_arn
+  protocol          = "TCP"
 
   default_action {
     type             = "forward"
@@ -420,7 +384,7 @@ resource "aws_lb_listener" "https" {
   }
 
   tags = {
-    Name = "ziti-${var.environment}-https"
+    Name = "ziti-${var.environment}-tcp"
   }
 }
 

@@ -134,3 +134,123 @@ curl http://localhost:8080/
 ```bash
 cat /opt/ziti/controller/.admin_password
 ```
+
+---
+
+## Ziti Services and Policies
+
+### Synthetic DNS Names
+
+Ziti uses **synthetic DNS names** for services on the overlay network. These are NOT real DNS records - they only resolve when connected to the Ziti network via `ziti-edge-tunnel`.
+
+**Naming Convention:**
+```
+<function>.<environment>.ziti
+```
+
+| Purpose | Synthetic DNS Name | Description |
+|---------|-------------------|-------------|
+| SSH access | `ssh.ziti-nonprod.ziti` | SSH to the Ziti server |
+| Controller | `controller.ziti-nonprod.ziti` | Controller management (future) |
+| Router | `router.ziti-nonprod.ziti` | Router management (future) |
+| App services | `*.theraprac.com.ziti` | Application dark services (future) |
+
+**Rules:**
+- All dark services end with `.ziti`
+- Environment prefix: `nonprod`, `prod`
+- Subdomain = function: `ssh`, `api`, `db`, etc.
+
+### SSH Service
+
+The SSH service allows authorized Ziti identities to SSH into the nonprod server through the zero-trust overlay network.
+
+**Service Details:**
+- **Name:** `ssh.ziti-nonprod`
+- **Synthetic DNS:** `ssh.ziti-nonprod.ziti`
+- **Backend:** `127.0.0.1:22` (localhost on router)
+- **Access:** Requires `role.ssh` attribute
+
+### Setting Up SSH Service
+
+```bash
+# Login to Ziti controller
+ziti edge login https://ziti-nonprod.theraprac.com --username admin --password <password>
+
+# Run setup scripts
+cd scripts/ziti
+./setup-all.sh
+
+# Or run individually:
+./setup-ssh-service.sh   # Create the service
+./setup-ssh-bind.sh      # Bind policy (router hosts service)
+./setup-ssh-dial.sh      # Dial policy (users access service)
+```
+
+### Creating User Identities
+
+```bash
+# Create user with SSH access
+./create-user.sh joe-dev --ssh
+
+# Create user without SSH (can add later)
+./create-user.sh bob-read
+
+# Grant SSH to existing user
+ziti edge update identity bob-read --role-attributes role.ssh
+```
+
+### Connecting via SSH
+
+**On your local machine:**
+
+1. **Enroll your identity** (one-time):
+   ```bash
+   ziti edge enroll your-name.jwt -o ~/.config/ziti/identities/your-name.json
+   ```
+
+2. **Start the tunnel**:
+   ```bash
+   # macOS/Linux
+   sudo ziti-edge-tunnel run ~/.config/ziti/identities/your-name.json
+   
+   # Or use Ziti Desktop Edge app
+   ```
+
+3. **SSH to the server**:
+   ```bash
+   ssh ec2-user@ssh.ziti-nonprod.ziti
+   ```
+
+### Verifying Configuration
+
+```bash
+# Run verification script
+./verify-ssh-service.sh
+
+# Manual checks
+ziti edge list services | grep ssh
+ziti edge list service-policies | grep ssh
+ziti edge list identities
+```
+
+### Role Attributes
+
+| Attribute | Access |
+|-----------|--------|
+| `role.ssh` | Can SSH to nonprod server |
+| `role.admin` | Admin-level access (future) |
+| `role.dev` | Developer access (future) |
+
+### Troubleshooting SSH Access
+
+**Can't resolve `ssh.ziti-nonprod.ziti`:**
+- Ensure `ziti-edge-tunnel` is running
+- Check your identity has `role.ssh` attribute
+
+**Connection refused:**
+- Verify router is online: `ziti edge list edge-routers`
+- Check bind policy exists: `ziti edge list service-policies | grep bind`
+
+**Permission denied:**
+- Ensure you're using the correct SSH user: `ec2-user`
+- Check SSH key is configured on the server
