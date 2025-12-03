@@ -15,9 +15,21 @@
   ansible.builtin.include_tasks: controller.yml
   tags: [controller]
 
+- name: Include credential management tasks
+  ansible.builtin.include_tasks: credentials.yml
+  tags: [credentials, secrets]
+
 - name: Include router tasks
   ansible.builtin.include_tasks: router.yml
   tags: [router]
+
+- name: Include Ziti services tasks
+  ansible.builtin.include_tasks: ziti_services.yml
+  tags: [services]
+
+- name: Include Ziti policies tasks
+  ansible.builtin.include_tasks: ziti_policies.yml
+  tags: [policies]
 
 - name: Include healthcheck tasks
   ansible.builtin.include_tasks: healthcheck.yml

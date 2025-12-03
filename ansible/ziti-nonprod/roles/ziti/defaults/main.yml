@@ -64,7 +64,27 @@ ziti_pki_org_unit: "Infrastructure"
 ziti_admin_user: "admin"
 ziti_admin_password_file: "{{ ziti_controller_dir }}/.admin_password"
 
+# AWS Secrets Manager path for admin password
+ziti_secrets_manager_path: "ziti/nonprod/admin-password"
+
+# Set to true to rotate the admin password during playbook run
+ziti_rotate_password: false
+
 # =============================================================================
 # Router Configuration
 # =============================================================================
 ziti_router_name: "router-nonprod"
+
+# Role attributes for the router identity
+ziti_router_role_attributes: "routers,tunnelers"
+
+# =============================================================================
+# Identity Role Conventions
+# =============================================================================
+# Standard role attributes used across the Ziti network:
+#   - users: All human users
+#   - developers: Developer team members
+#   - ssh-users: Users who can dial SSH services
+#   - routers: Edge routers that bind services
+#   - tunnelers: Routers with tunneler enabled
+#   - ssh-services: SSH service category

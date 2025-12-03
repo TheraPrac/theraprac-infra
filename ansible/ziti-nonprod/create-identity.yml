@@ -1,0 +1,106 @@
+# =============================================================================
+# Create Ziti Identity Playbook
+# =============================================================================
+# Creates a new Ziti identity with proper role attributes.
+#
+# Usage:
+#   ansible-playbook create-identity.yml \
+#     -e "identity_name=jane-dev" \
+#     -e "identity_roles=users,developers,ssh-users"
+#
+# Required Variables:
+#   - identity_name: Name of the identity to create
+#   - identity_roles: Comma-separated list of role attributes
+#
+# Output:
+#   - Creates <identity_name>.jwt in the current directory
+#   - User enrolls with: ziti edge enroll <identity_name>.jwt
+# =============================================================================
+
+---
+- name: Create Ziti Identity
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    ziti_public_endpoint: "ziti-nonprod.theraprac.com"
+    ziti_controller_port: 443
+    ziti_admin_user: "admin"
+    ziti_secrets_manager_path: "ziti/nonprod/admin-password"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable '{{ item }}' is not defined"
+      when: vars[item] is not defined
+      loop:
+        - identity_name
+        - identity_roles
+
+    - name: Get admin password from Secrets Manager
+      amazon.aws.secretsmanager_secret:
+        name: "{{ ziti_secrets_manager_path }}"
+        state: present
+      register: sm_secret
+      no_log: true
+
+    - name: Set admin password fact
+      ansible.builtin.set_fact:
+        ziti_admin_password: "{{ sm_secret.secret }}"
+      no_log: true
+
+    - name: Login to Ziti controller
+      ansible.builtin.command:
+        cmd: >
+          ziti edge login
+          https://{{ ziti_public_endpoint }}:{{ ziti_controller_port }}
+          --yes
+          --username {{ ziti_admin_user }}
+          --password "{{ ziti_admin_password }}"
+      no_log: true
+      changed_when: true
+
+    - name: Check if identity already exists
+      ansible.builtin.shell: |
+        ziti edge list identities 'name="{{ identity_name }}"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: identity_count
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if identity already exists
+      ansible.builtin.fail:
+        msg: "Identity '{{ identity_name }}' already exists. Use 'ziti edge delete identity {{ identity_name }}' to remove it first."
+      when: identity_count.stdout | default('0') | int > 0
+
+    - name: Create identity with role attributes
+      ansible.builtin.command:
+        cmd: >
+          ziti edge create identity {{ identity_name }}
+          --role-attributes "{{ identity_roles }}"
+          -o {{ identity_name }}.jwt
+      register: identity_created
+
+    - name: Display success message
+      ansible.builtin.debug:
+        msg: |
+          ✅ Identity '{{ identity_name }}' created successfully!
+          
+          Role attributes: {{ identity_roles }}
+          JWT file: {{ identity_name }}.jwt
+          
+          To enroll on client machine:
+            ziti edge enroll {{ identity_name }}.jwt -o ~/.config/ziti/identities/{{ identity_name }}.json
+          
+          Or import into Ziti Desktop Edge (ZDE).
+
+    - name: Show JWT file location
+      ansible.builtin.command:
+        cmd: ls -la {{ identity_name }}.jwt
+      register: jwt_file
+      changed_when: false
+
+    - name: Display file info
+      ansible.builtin.debug:
+        msg: "{{ jwt_file.stdout }}"
+

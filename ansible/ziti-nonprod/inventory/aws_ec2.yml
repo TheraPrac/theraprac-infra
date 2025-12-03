@@ -1,27 +1,49 @@
 # =============================================================================
-# TheraPrac Ziti Nonprod - AWS EC2 Dynamic Inventory with SSM
+# Dynamic AWS EC2 Inventory for Ziti Nonprod
 # =============================================================================
+# Uses the amazon.aws.aws_ec2 plugin to dynamically discover instances.
+# Filters by the Ansible=ziti-nonprod tag set by Terraform.
+#
+# Prerequisites:
+#   - ansible-galaxy collection install amazon.aws
+#   - pip install boto3 botocore
+#   - AWS credentials configured (aws sso login)
+# =============================================================================
+
 plugin: amazon.aws.aws_ec2
 
+# AWS region to search
 regions:
   - us-west-2
 
+# Filter to only get our Ziti instance
 filters:
-  tag:Role: ziti-server
+  tag:Ansible: ziti-nonprod
   instance-state-name: running
 
+# Use instance ID as the inventory hostname
 hostnames:
   - instance-id
 
+# Compose variables for the host
 compose:
-  ansible_host: private_ip_address
-  ansible_connection: community.aws.aws_ssm
-  ansible_aws_ssm_region: us-west-2
-  ansible_aws_ssm_bucket_name: ""
+  ansible_host: instance_id
   ansible_user: ec2-user
+  # Use EC2 Instance Connect for SSH tunneling
+  ansible_ssh_common_args: >-
+    -o StrictHostKeyChecking=accept-new
+    -o UserKnownHostsFile=~/.ssh/known_hosts_ziti
+    -o ProxyCommand="aws ec2-instance-connect open-tunnel --instance-id %h --region us-west-2"
 
+# Group instances by tags
 keyed_groups:
+  - key: tags.Ansible
+    prefix: ansible
   - key: tags.Environment
     prefix: env
-  - key: tags.Role
-    prefix: role
+
+# Cache settings for faster subsequent runs
+cache: true
+cache_plugin: jsonfile
+cache_timeout: 300
+cache_connection: /tmp/aws_ec2_cache

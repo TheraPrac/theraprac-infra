@@ -11,6 +11,11 @@ output "ziti_ec2_id" {
   value       = aws_instance.ziti.id
 }
 
+output "ziti_availability_zone" {
+  description = "Availability zone of the Ziti EC2 instance"
+  value       = aws_instance.ziti.availability_zone
+}
+
 output "ziti_ec2_private_ip" {
   description = "Private IP of the Ziti EC2 instance"
   value       = aws_instance.ziti.private_ip

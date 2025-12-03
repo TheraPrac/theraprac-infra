@@ -1,0 +1,110 @@
+# =============================================================================
+# Ziti Role - Policies Configuration
+# =============================================================================
+# Creates Ziti service policies and edge router policies.
+# Uses role attributes (not identity names) for scalable policy management.
+#
+# Role Attributes Convention:
+#   - #ssh-services: SSH service category
+#   - #routers: Edge routers that can bind services
+#   - #ssh-users: Users who can dial SSH services
+#   - #users: All human users (for edge router access)
+# =============================================================================
+
+---
+- name: Ensure logged in to Ziti controller
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge login
+      https://127.0.0.1:{{ ziti_controller_port }}
+      --yes
+      --username {{ ziti_admin_user }}
+      --password "{{ ziti_admin_password }}"
+  no_log: true
+  changed_when: true
+
+# =============================================================================
+# Service Policies
+# =============================================================================
+
+- name: Check if ssh-bind policy exists
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list service-policies 'name="ssh-bind"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: ssh_bind_policy_count
+  changed_when: false
+  failed_when: false
+
+- name: Create ssh-bind service policy (routers can bind SSH services)
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge create service-policy ssh-bind Bind
+      --service-roles "#ssh-services"
+      --identity-roles "#routers"
+  when: ssh_bind_policy_count.stdout | default('0') | int == 0
+  register: ssh_bind_policy_created
+
+- name: Check if ssh-dial policy exists
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list service-policies 'name="ssh-dial"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: ssh_dial_policy_count
+  changed_when: false
+  failed_when: false
+
+- name: Create ssh-dial service policy (ssh-users can dial SSH services)
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge create service-policy ssh-dial Dial
+      --service-roles "#ssh-services"
+      --identity-roles "#ssh-users"
+  when: ssh_dial_policy_count.stdout | default('0') | int == 0
+  register: ssh_dial_policy_created
+
+# =============================================================================
+# Edge Router Policies
+# =============================================================================
+
+- name: Check if users-to-routers edge router policy exists
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list edge-router-policies 'name="users-to-routers"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: erp_count
+  changed_when: false
+  failed_when: false
+
+- name: Create edge router policy (users can access all routers)
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge create edge-router-policy users-to-routers
+      --edge-router-roles "#all"
+      --identity-roles "#users"
+  when: erp_count.stdout | default('0') | int == 0
+  register: erp_created
+
+# =============================================================================
+# Service Edge Router Policies
+# =============================================================================
+
+- name: Check if ssh-service-routers policy exists
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list service-edge-router-policies 'name="ssh-service-routers"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: serp_count
+  changed_when: false
+  failed_when: false
+
+- name: Create service edge router policy (SSH services available on all routers)
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge create service-edge-router-policy ssh-service-routers
+      --edge-router-roles "#all"
+      --service-roles "#ssh-services"
+  when: serp_count.stdout | default('0') | int == 0
+  register: serp_created
+
+- name: Display policy creation results
+  ansible.builtin.debug:
+    msg: |
+      Policy Configuration:
+      - ssh-bind (Bind): {{ 'created' if ssh_bind_policy_created is changed else 'exists' }}
+      - ssh-dial (Dial): {{ 'created' if ssh_dial_policy_created is changed else 'exists' }}
+      - users-to-routers (ERP): {{ 'created' if erp_created is changed else 'exists' }}
+      - ssh-service-routers (SERP): {{ 'created' if serp_created is changed else 'exists' }}
+

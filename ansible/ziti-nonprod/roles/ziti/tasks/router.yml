@@ -80,12 +80,13 @@
   changed_when: true
   failed_when: false
 
-- name: Create edge router in controller
+- name: Create edge router in controller with role attributes
   ansible.builtin.command:
     cmd: >
       {{ ziti_bin }} edge create edge-router {{ ziti_router_name }}
       --jwt-output-file {{ ziti_router_dir }}/router.jwt
       --tunneler-enabled
+      --role-attributes "{{ ziti_router_role_attributes }}"
   when: not router_cert_stat.stat.exists
   register: router_create
 

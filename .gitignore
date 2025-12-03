@@ -32,3 +32,40 @@ Thumbs.db
 # Env files
 .env
 .env.*
+
+# =============================================================================
+# Security - Sensitive Files
+# =============================================================================
+# NEVER commit these files - they contain secrets or credentials
+
+# Ziti enrollment tokens (one-time use, contain identity info)
+*.jwt
+
+# TLS/SSL certificates and private keys
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+
+# Secrets directories
+**/secrets/
+**/.secrets/
+
+# Ansible vault files (if using plaintext vault password)
+.vault_pass
+.vault_password
+vault_password_file
+
+# AWS credentials (should use SSO/profiles instead)
+credentials
+.aws/credentials
+
+# SSH keys
+id_rsa
+id_ed25519
+*.pem
+
+# Ansible inventory cache
+/tmp/aws_ec2_cache

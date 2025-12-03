@@ -12,6 +12,7 @@ Installs and configures OpenZiti controller + router on the nonprod EC2 instance
                        ┌───────▼───────┐
                        │   NLB (TCP)   │   ← TCP Passthrough (critical!)
                        │  Port 443     │
+                       │  Port 8442    │
                        └───────┬───────┘
                                │
 ┌──────────────────────────────┼──────────────────────────────────┐
@@ -53,12 +54,6 @@ Router enrollment requires the controller's actual TLS certificate to verify JWT
    pip install boto3 botocore
    ```
 
-4. **SSH access** (via EC2 Instance Connect):
-   ```bash
-   aws ec2-instance-connect ssh --instance-id i-023506901dab49d56 \
-     --os-user ec2-user --connection-type eice --profile jfinlinson_admin
-   ```
-
 ## Usage
 
 ### Running the Playbook
@@ -66,24 +61,115 @@ Router enrollment requires the controller's actual TLS certificate to verify JWT
 ```bash
 cd ansible/ziti-nonprod
 
-# Using static inventory (EC2 Instance Connect)
-ansible-playbook -i inventory.yml playbook.yml
+# Recommended: Use the runner script (handles SSH key push and dynamic inventory)
+./run-playbook.sh
+
+# Or manually with dynamic inventory
+ansible-playbook -i inventory/aws_ec2.yml playbook.yml
 ```
 
 ### Run Specific Tags
 
 ```bash
 # Install binary only
-ansible-playbook -i inventory.yml playbook.yml --tags install
+./run-playbook.sh --tags install
 
 # PKI only
-ansible-playbook -i inventory.yml playbook.yml --tags pki
+./run-playbook.sh --tags pki
 
 # Controller only
-ansible-playbook -i inventory.yml playbook.yml --tags controller
+./run-playbook.sh --tags controller
 
-# Router only
-ansible-playbook -i inventory.yml playbook.yml --tags router
+# Credentials/Secrets Manager sync
+./run-playbook.sh --tags credentials
+
+# Services and policies
+./run-playbook.sh --tags services,policies
+```
+
+### Rotate Admin Password
+
+```bash
+./run-playbook.sh -e "ziti_rotate_password=true"
+```
+
+## Identity Role Architecture
+
+Ziti uses role attributes for scalable policy management. **Never reference identities directly in policies** - use role attributes instead.
+
+### Standard Role Attributes
+
+| Role | Purpose | Assigned To |
+|------|---------|-------------|
+| `users` | All human users | User identities |
+| `developers` | Developer team members | Developer identities |
+| `ssh-users` | Can dial SSH services | Users needing SSH access |
+| `routers` | Edge routers that bind services | Router identities |
+| `tunnelers` | Routers with tunneler enabled | Router identities |
+| `ssh-services` | SSH service category | SSH services |
+
+### Creating New Identities
+
+```bash
+# Use the create-identity playbook
+ansible-playbook create-identity.yml \
+  -e "identity_name=jane-dev" \
+  -e "identity_roles=users,developers,ssh-users"
+
+# Output: jane-dev.jwt
+# User enrolls with: ziti edge enroll jane-dev.jwt
+```
+
+### Policy Structure
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Service Policies                                            │
+├─────────────────────────────────────────────────────────────┤
+│ ssh-bind:  #ssh-services → #routers (Bind)                  │
+│ ssh-dial:  #ssh-services → #ssh-users (Dial)                │
+└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│ Edge Router Policies                                        │
+├─────────────────────────────────────────────────────────────┤
+│ users-to-routers: #all routers → #users                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Credentials Management
+
+### Admin Password
+
+The admin password is stored in two places:
+1. **AWS Secrets Manager**: `ziti/nonprod/admin-password` (primary)
+2. **Filesystem**: `/opt/ziti/controller/.admin_password` (backup)
+
+### Retrieve Admin Password
+
+```bash
+# From Secrets Manager
+aws secretsmanager get-secret-value \
+  --secret-id ziti/nonprod/admin-password \
+  --query SecretString --output text \
+  --profile jfinlinson_admin
+
+# Or from the instance
+ssh ec2-user@<instance> "sudo cat /opt/ziti/controller/.admin_password"
+```
+
+### Login to Ziti CLI
+
+```bash
+# Get password from Secrets Manager
+ZITI_PASS=$(aws secretsmanager get-secret-value \
+  --secret-id ziti/nonprod/admin-password \
+  --query SecretString --output text \
+  --profile jfinlinson_admin)
+
+# Login
+ziti edge login https://ziti-nonprod.theraprac.com \
+  --username admin \
+  --password "$ZITI_PASS"
 ```
 
 ## What Gets Created
@@ -124,29 +210,6 @@ ansible-playbook -i inventory.yml playbook.yml --tags router
 | ziti-router | 8442 | Edge router for SDK clients |
 | healthcheck | 8080 | NLB health check endpoint |
 
-## PKI Architecture
-
-The playbook creates a multi-level CA hierarchy required for Ziti v1.6+:
-
-```
-theraprac-root (Root CA)
-└── theraprac-external-ica (External Intermediate)
-    ├── theraprac-network-ica (Network Components)
-    │   ├── network-server.cert  ← Controller fabric identity
-    │   └── network-client.cert
-    ├── theraprac-edge-ica (Edge)
-    │   ├── edge-server.cert     ← Web identity (signs JWTs!)
-    │   └── edge-client.cert
-    └── theraprac-sign-ica (Signing)
-        └── Used for enrollment signingCert
-```
-
-**Why this structure matters:**
-- Router enrollment fetches the TLS cert from the NLB connection
-- JWT is signed with the web identity key
-- Router verifies JWT signature using the TLS cert's public key
-- If ALB terminates TLS → different cert → signature mismatch → enrollment fails!
-
 ## Variables
 
 Key variables in `roles/ziti/defaults/main.yml`:
@@ -156,34 +219,33 @@ Key variables in `roles/ziti/defaults/main.yml`:
 | `ziti_version` | `1.6.9` | Pinned Ziti version |
 | `ziti_install_dir` | `/opt/ziti` | Base directory |
 | `ziti_controller_port` | `443` | Edge API port |
-| `ziti_controller_ctrl_port` | `6262` | Control plane port |
 | `ziti_router_edge_port` | `8442` | Router edge port |
-| `ziti_healthcheck_port` | `8080` | Health check port |
 | `ziti_public_endpoint` | `ziti-nonprod.theraprac.com` | Public DNS |
-
-## Idempotency
-
-The playbook is designed to be run multiple times safely:
-
-- **Binary**: Only downloads if version mismatch
-- **PKI**: Uses `creates:` guards, won't regenerate existing certs
-- **Controller init**: Only runs if `ctrl.db` doesn't exist
-- **Router enrollment**: Only runs if `router.cert` doesn't exist
-- **Templates**: Only restart services on config changes
+| `ziti_rotate_password` | `false` | Set to rotate admin password |
+| `ziti_secrets_manager_path` | `ziti/nonprod/admin-password` | Secrets Manager path |
 
 ## Troubleshooting
+
+### SSH Access (Break-Glass)
+
+EC2 Instance Connect is available for emergency access:
+
+```bash
+# Get instance ID from Terraform
+INSTANCE_ID=$(terraform -chdir=../../infra/phase4-ziti output -raw ziti_ec2_id)
+
+# SSH via EICE
+aws ec2-instance-connect ssh \
+  --instance-id $INSTANCE_ID \
+  --os-user ec2-user \
+  --connection-type eice \
+  --profile jfinlinson_admin
+```
 
 ### Check Service Status
 
 ```bash
-# SSH to instance
-aws ec2-instance-connect ssh --instance-id i-023506901dab49d56 \
-  --os-user ec2-user --connection-type eice --profile jfinlinson_admin
-
-# Check all services
 sudo systemctl status ziti-controller ziti-router healthcheck
-
-# View logs
 sudo journalctl -u ziti-controller -f
 sudo journalctl -u ziti-router -f
 ```
@@ -198,30 +260,7 @@ curl http://localhost:8080/
 curl -sk https://ziti-nonprod.theraprac.com/edge/client/v1/version
 ```
 
-### Get Admin Credentials
-
-```bash
-sudo cat /opt/ziti/controller/.admin_password
-```
-
-### Login to Ziti
-
-```bash
-# On the instance
-ziti edge login https://ziti-nonprod.theraprac.com \
-  --username admin \
-  --password "$(sudo cat /opt/ziti/controller/.admin_password)"
-
-# List identities
-ziti edge list identities
-
-# List routers
-ziti edge list edge-routers
-```
-
 ### Router Not Online
-
-If the router shows as offline:
 
 ```bash
 # Check router logs
@@ -230,49 +269,28 @@ sudo journalctl -u ziti-router -n 100 --no-pager
 # Verify enrollment files exist
 ls -la /opt/ziti/router/
 
-# Re-enroll if needed (DESTRUCTIVE!)
-ziti edge delete edge-router router-nonprod
-ziti edge create edge-router router-nonprod -o /opt/ziti/router/router.jwt
-ziti router enroll /opt/ziti/router/router.yaml --jwt /opt/ziti/router/router.jwt
-sudo systemctl restart ziti-router
-```
-
-## Creating User Identities
-
-```bash
-# Login as admin
-ziti edge login https://ziti-nonprod.theraprac.com --username admin --password <password>
-
-# Create identity
-ziti edge create identity user joe-dev -o joe-dev.jwt
-
-# User enrolls on their machine
-ziti edge enroll joe-dev.jwt -o ~/.config/ziti/identities/joe-dev.json
+# Check router status in controller
+ziti edge list edge-routers
 ```
 
 ## Disaster Recovery
 
 ### From AMI Backup
 
-An AMI snapshot was created: `ami-0c37299166e468048`
+AMI snapshots are created periodically. To restore:
 
 ```bash
-# Launch new instance from AMI
-aws ec2 run-instances \
-  --image-id ami-0c37299166e468048 \
-  --instance-type t4g.micro \
-  --subnet-id <private-ziti-subnet-id> \
-  --iam-instance-profile Name=theraprac-ziti-controller-instance-profile \
-  ...
+# Get latest AMI (check AWS Console or use aws ec2 describe-images)
+# Update Terraform to use specific AMI if needed
+# Apply Terraform
+# Run Ansible to ensure configuration
 ```
 
 ### Fresh Install
 
 1. Apply Terraform Phase 4 to create new EC2
-2. Run Ansible playbook
+2. Run Ansible playbook: `./run-playbook.sh`
 3. Recreate user identities (JWTs expire, so users need new ones)
-
----
 
 ## Key Files Reference
 
@@ -282,7 +300,8 @@ aws ec2 run-instances \
 | `tasks/install.yml` | Binary installation |
 | `tasks/pki.yml` | PKI hierarchy creation |
 | `tasks/controller.yml` | Controller config + edge init |
+| `tasks/credentials.yml` | Password rotation + Secrets Manager |
 | `tasks/router.yml` | Router config + enrollment |
-| `tasks/systemd.yml` | Service management |
-| `templates/controller.yaml.j2` | Controller config template |
-| `templates/router.yaml.j2` | Router config template |
+| `tasks/ziti_services.yml` | Service definitions |
+| `tasks/ziti_policies.yml` | Policy definitions |
+| `create-identity.yml` | Standalone playbook for creating identities |

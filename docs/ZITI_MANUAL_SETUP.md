@@ -1,13 +1,12 @@
 # Ziti Manual Setup Documentation
 
-This document captures all manual CLI work performed to get Ziti working. This should eventually be automated in Ansible.
+> **HISTORICAL DOCUMENTATION**: This document captures the manual CLI work that was performed to initially set up Ziti. The authoritative source of truth is now the Ansible playbook in `ansible/ziti-nonprod/`. Use Ansible for any new deployments or changes.
 
 ## Backup
 
-**AMI Snapshot**: `ami-0c37299166e468048`
-- Created: 2025-12-03
-- Description: Working Ziti controller+router with enrolled joe-dev identity
-- Instance: i-023506901dab49d56
+**AMI Snapshots**:
+- `ami-01a34af75e432b0f0` - Latest (2025-12-03) - Working Ziti with port 8442 exposed
+- `ami-0c37299166e468048` - Previous snapshot
 
 ---
 
@@ -17,10 +16,10 @@ This document captures all manual CLI work performed to get Ziti working. This s
 |-----------|--------|-------|
 | Controller | ✅ Running | v1.6.9, systemd enabled |
 | Router | ✅ Running, Online | enrolled as `router-nonprod` |
-| Admin Password | `AmZPCzREbR1sVwoGZWMcPePt` | stored in `/opt/ziti/controller/.admin_password` |
+| Admin Password | See Secrets Manager | `ziti/nonprod/admin-password` or `/opt/ziti/controller/.admin_password` |
 | Identities | `Default Admin`, `joe-dev` | joe-dev is enrolled |
-| Services | None | SSH service not yet created |
-| Service Policies | None | |
+| Services | `ssh-nonprod` | SSH access to controller host |
+| Service Policies | Bind + Dial | See Ansible for definitions |
 
 ---
 
@@ -223,12 +222,20 @@ sudo systemctl enable ziti-router
 
 ### 6. Create User Identity
 
+> **NOTE**: Use the Ansible playbook for creating identities with proper role attributes:
+> ```bash
+> ansible-playbook ansible/ziti-nonprod/create-identity.yml \
+>   -e "identity_name=jane-dev" \
+>   -e "identity_roles=users,developers,ssh-users"
+> ```
+
+Historical manual command (deprecated):
 ```bash
-# Create joe-dev identity
-ziti edge create identity joe-dev -o /home/ec2-user/joe-dev.jwt
+# Create identity with role attributes
+ziti edge create identity <name> --role-attributes "users,developers,ssh-users" -o <name>.jwt
 
 # User enrolls on their machine:
-# ziti edge enroll joe-dev.jwt -o ~/.config/ziti/identities/joe-dev.json
+# ziti edge enroll <name>.jwt -o ~/.config/ziti/identities/<name>.json
 ```
 
 ---
@@ -286,17 +293,21 @@ The router enrollment was failing with "token signature is invalid" because:
 
 ---
 
-## What Ansible Should Automate
+## Ansible Automation Status
 
-To make this reproducible, Ansible needs to:
+All manual steps have been automated in `ansible/ziti-nonprod/`:
 
-1. ✅ Install Ziti binary (already done)
-2. ❌ Create full PKI hierarchy using `ziti pki` commands
-3. ❌ Generate controller.yaml with correct PKI paths
-4. ❌ Run `ziti controller edge init`
-5. ❌ Create router identity and enroll
-6. ❌ Store admin password securely
-7. ✅ Create systemd services (already done)
-8. ✅ Health check (already done)
+1. ✅ Install Ziti binary (`tasks/install.yml`)
+2. ✅ Create full PKI hierarchy (`tasks/pki.yml`)
+3. ✅ Generate controller.yaml (`templates/controller.yaml.j2`)
+4. ✅ Run `ziti controller edge init` (`tasks/controller.yml`)
+5. ✅ Create router identity and enroll (`tasks/router.yml`)
+6. ✅ Store admin password securely (`tasks/credentials.yml` + Secrets Manager)
+7. ✅ Create systemd services (`tasks/systemd.yml`)
+8. ✅ Health check (`tasks/healthcheck.yml`)
+9. ✅ Services and policies (`tasks/ziti_services.yml`, `tasks/ziti_policies.yml`)
+10. ✅ Identity creation playbook (`create-identity.yml`)
+
+**This document is now historical reference only. Use Ansible for all operations.**
 
 

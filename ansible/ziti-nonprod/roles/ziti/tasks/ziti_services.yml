@@ -1,0 +1,77 @@
+# =============================================================================
+# Ziti Role - Services Configuration
+# =============================================================================
+# Creates Ziti services with proper host and intercept configs.
+# Services use role attributes for policy matching.
+# =============================================================================
+
+---
+- name: Ensure logged in to Ziti controller
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge login
+      https://127.0.0.1:{{ ziti_controller_port }}
+      --yes
+      --username {{ ziti_admin_user }}
+      --password "{{ ziti_admin_password }}"
+  no_log: true
+  changed_when: true
+
+# =============================================================================
+# SSH Service Configuration
+# =============================================================================
+
+- name: Check if ssh-nonprod host config exists
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list configs 'name="ssh-nonprod.host"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: ssh_host_config_count
+  changed_when: false
+  failed_when: false
+
+- name: Create ssh-nonprod host config
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge create config ssh-nonprod.host host.v1
+      '{"protocol":"tcp", "address":"localhost", "port":22}'
+  when: ssh_host_config_count.stdout | default('0') | int == 0
+  register: ssh_host_config_created
+
+- name: Check if ssh-nonprod intercept config exists
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list configs 'name="ssh-nonprod.intercept"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: ssh_intercept_config_count
+  changed_when: false
+  failed_when: false
+
+- name: Create ssh-nonprod intercept config
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge create config ssh-nonprod.intercept intercept.v1
+      '{"protocols":["tcp"], "addresses":["ssh.ziti-nonprod.ziti"], "portRanges":[{"low":22, "high":22}]}'
+  when: ssh_intercept_config_count.stdout | default('0') | int == 0
+  register: ssh_intercept_config_created
+
+- name: Check if ssh-nonprod service exists
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list services 'name="ssh-nonprod"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: ssh_service_count
+  changed_when: false
+  failed_when: false
+
+- name: Create ssh-nonprod service
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge create service ssh-nonprod
+      --configs ssh-nonprod.host,ssh-nonprod.intercept
+      --role-attributes ssh-services
+  when: ssh_service_count.stdout | default('0') | int == 0
+  register: ssh_service_created
+
+- name: Display service creation results
+  ansible.builtin.debug:
+    msg: |
+      SSH Service Configuration:
+      - Host config: {{ 'created' if ssh_host_config_created is changed else 'exists' }}
+      - Intercept config: {{ 'created' if ssh_intercept_config_created is changed else 'exists' }}
+      - Service: {{ 'created' if ssh_service_created is changed else 'exists' }}
+

@@ -5,12 +5,17 @@
 #
 # Usage:
 #   cd ansible/ziti-nonprod
-#   ansible-playbook -i inventory/aws_ssm.yml playbook.yml
+#   ./run-playbook.sh                           # Recommended
+#   ansible-playbook -i inventory/aws_ec2.yml playbook.yml
 #
 # Prerequisites:
 #   - Terraform Phase 4 must be applied (EC2 instance exists)
-#   - AWS credentials with SSM permissions
-#   - Session Manager plugin installed
+#   - AWS credentials configured (aws sso login)
+#   - ansible-galaxy collection install amazon.aws
+#
+# Tags:
+#   install, pki, controller, credentials, router, services, policies,
+#   healthcheck, systemd, secrets
 # =============================================================================
 
 ---
@@ -21,3 +26,21 @@
 
   roles:
     - role: ziti
+
+  post_tasks:
+    - name: Ensure router service is running
+      ansible.builtin.systemd:
+        name: ziti-router
+        state: started
+        enabled: true
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: |
+          ✅ Ziti deployment complete!
+          
+          Controller: https://{{ ziti_public_endpoint }}
+          Admin password: See Secrets Manager ({{ ziti_secrets_manager_path }})
+          
+          To create new identities:
+            ansible-playbook create-identity.yml -e "identity_name=<name>" -e "identity_roles=users,ssh-users"
