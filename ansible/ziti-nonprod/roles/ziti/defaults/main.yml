@@ -79,6 +79,19 @@ ziti_router_name: "router-nonprod"
 ziti_router_role_attributes: "routers,tunnelers"
 
 # =============================================================================
+# SSH Key Management
+# =============================================================================
+# Add public keys here for permanent SSH access via Ziti overlay.
+# These keys will be added to ec2-user's authorized_keys.
+#
+# Example:
+#   ziti_authorized_ssh_keys:
+#     - "ssh-ed25519 AAAAC3... user@example.com"
+#     - "ssh-rsa AAAAB3... another@example.com"
+# =============================================================================
+ziti_authorized_ssh_keys: []
+
+# =============================================================================
 # Identity Role Conventions
 # =============================================================================
 # Standard role attributes used across the Ziti network:

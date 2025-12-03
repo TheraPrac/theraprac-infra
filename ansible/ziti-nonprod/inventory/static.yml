@@ -1,0 +1,17 @@
+# =============================================================================
+# Static Inventory for Ziti Nonprod (Fallback)
+# =============================================================================
+# Use this if dynamic inventory has issues.
+# Uses SSM Session Manager for connections.
+#
+# Usage: ansible-playbook -i inventory/static.yml playbook.yml
+# =============================================================================
+
+all:
+  hosts:
+    ziti-nonprod:
+      ansible_host: i-023506901dab49d56
+      ansible_user: ec2-user
+      ansible_connection: community.aws.aws_ssm
+      ansible_aws_ssm_region: us-west-2
+

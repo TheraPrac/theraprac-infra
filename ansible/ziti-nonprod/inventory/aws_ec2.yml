@@ -2,12 +2,13 @@
 # Dynamic AWS EC2 Inventory for Ziti Nonprod
 # =============================================================================
 # Uses the amazon.aws.aws_ec2 plugin to dynamically discover instances.
-# Filters by the Ansible=ziti-nonprod tag set by Terraform.
+# Uses SSM Session Manager for connections (no SSH keys needed).
 #
 # Prerequisites:
 #   - ansible-galaxy collection install amazon.aws
 #   - pip install boto3 botocore
-#   - AWS credentials configured (aws sso login)
+#   - Session Manager plugin installed
+#   - AWS credentials configured (via env vars)
 # =============================================================================
 
 plugin: amazon.aws.aws_ec2
@@ -25,25 +26,17 @@ filters:
 hostnames:
   - instance-id
 
-# Compose variables for the host
+# Use SSM connection instead of SSH
 compose:
-  ansible_host: instance_id
   ansible_user: ec2-user
-  # Use EC2 Instance Connect for SSH tunneling
-  ansible_ssh_common_args: >-
-    -o StrictHostKeyChecking=accept-new
-    -o UserKnownHostsFile=~/.ssh/known_hosts_ziti
-    -o ProxyCommand="aws ec2-instance-connect open-tunnel --instance-id %h --region us-west-2"
+  ansible_connection: community.aws.aws_ssm
+  ansible_aws_ssm_region: us-west-2
 
 # Group instances by tags
 keyed_groups:
   - key: tags.Ansible
     prefix: ansible
+    separator: "_"
   - key: tags.Environment
     prefix: env
-
-# Cache settings for faster subsequent runs
-cache: true
-cache_plugin: jsonfile
-cache_timeout: 300
-cache_connection: /tmp/aws_ec2_cache
+    separator: "_"

@@ -38,3 +38,7 @@
 - name: Include systemd tasks
   ansible.builtin.include_tasks: systemd.yml
   tags: [systemd]
+
+- name: Include SSH key management
+  ansible.builtin.include_tasks: ssh_keys.yml
+  tags: [ssh_keys]

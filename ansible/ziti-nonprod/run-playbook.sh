@@ -2,16 +2,17 @@
 # =============================================================================
 # Ziti Ansible Playbook Runner
 # =============================================================================
-# Dynamically retrieves instance ID from Terraform and runs the playbook.
-# Uses EC2 Instance Connect for secure SSH access.
+# Connects via Ziti overlay network (requires ZDE running).
+# Falls back to EICE if Ziti is unavailable.
+#
+# SSH is configured with persistent keys (ansible@theraprac.com)
+# No ephemeral key pushing needed.
 # =============================================================================
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$SCRIPT_DIR/../../infra/phase4-ziti"
-SSH_KEY="$HOME/.ssh/id_ed25519_eice"
-REGION="us-west-2"
+ZITI_HOST="ssh.ziti-nonprod.ziti"
 
 # Colors
 GREEN='\033[0;32m'
@@ -21,37 +22,26 @@ NC='\033[0m'
 
 cd "$SCRIPT_DIR"
 
-# Get instance ID from Terraform
-echo -e "${GREEN}Retrieving instance ID from Terraform...${NC}"
-if ! INSTANCE_ID=$(terraform -chdir="$INFRA_DIR" output -raw ziti_ec2_id 2>/dev/null); then
-    echo -e "${RED}Failed to get instance ID from Terraform. Is phase4-ziti applied?${NC}"
-    exit 1
+# Check if Ziti tunnel is working
+echo -e "${GREEN}Checking Ziti connectivity...${NC}"
+if nc -z -w 2 "$ZITI_HOST" 22 2>/dev/null; then
+    echo -e "${GREEN}✓ Ziti tunnel active - using Ziti inventory${NC}"
+    INVENTORY="inventory/ziti.yml"
+else
+    echo -e "${YELLOW}⚠ Ziti tunnel not available - falling back to EICE${NC}"
+    INVENTORY="inventory/eice.yml"
+    
+    # EICE requires AWS credentials
+    if [ -z "$AWS_PROFILE" ]; then
+        export AWS_PROFILE="jfinlinson_admin"
+    fi
+    
+    # Check AWS credentials
+    if ! aws sts get-caller-identity >/dev/null 2>&1; then
+        echo -e "${YELLOW}AWS session expired. Running 'aws sso login'...${NC}"
+        aws sso login --profile "$AWS_PROFILE"
+    fi
 fi
 
-if ! AZ=$(terraform -chdir="$INFRA_DIR" output -raw ziti_availability_zone 2>/dev/null); then
-    echo -e "${YELLOW}Could not get AZ from Terraform, defaulting to us-west-2a${NC}"
-    AZ="us-west-2a"
-fi
-
-echo -e "${GREEN}Instance ID: ${INSTANCE_ID}${NC}"
-echo -e "${GREEN}Availability Zone: ${AZ}${NC}"
-
-# Generate SSH key if it doesn't exist
-if [ ! -f "$SSH_KEY" ]; then
-    echo -e "${YELLOW}Generating SSH key...${NC}"
-    ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "eice-ansible"
-fi
-
-echo -e "${GREEN}Pushing SSH key to EC2 instance...${NC}"
-aws ec2-instance-connect send-ssh-public-key \
-    --instance-id "$INSTANCE_ID" \
-    --instance-os-user ec2-user \
-    --ssh-public-key "file://${SSH_KEY}.pub" \
-    --region "$REGION" \
-    --availability-zone "$AZ"
-
-# Export for dynamic inventory
-export ZITI_INSTANCE_ID="$INSTANCE_ID"
-
-echo -e "${GREEN}Running Ansible playbook...${NC}"
-ansible-playbook -i inventory/aws_ec2.yml playbook.yml "$@"
+echo -e "${GREEN}Running Ansible playbook with ${INVENTORY}...${NC}"
+ansible-playbook -i "$INVENTORY" playbook.yml "$@"

@@ -1,0 +1,24 @@
+# =============================================================================
+# Ziti Role - SSH Key Management
+# =============================================================================
+# Adds authorized SSH keys for admin access via Ziti overlay.
+# Keys are defined in defaults/main.yml or passed as variables.
+# =============================================================================
+
+---
+- name: Ensure .ssh directory exists
+  ansible.builtin.file:
+    path: /home/ec2-user/.ssh
+    state: directory
+    owner: ec2-user
+    group: ec2-user
+    mode: '0700'
+
+- name: Add authorized SSH keys
+  ansible.builtin.authorized_key:
+    user: ec2-user
+    key: "{{ item }}"
+    state: present
+  loop: "{{ ziti_authorized_ssh_keys }}"
+  when: ziti_authorized_ssh_keys is defined and ziti_authorized_ssh_keys | length > 0
+

@@ -133,15 +133,26 @@ output "ansible_host" {
 }
 
 output "ansible_inventory_hint" {
-  description = "Hint for Ansible SSM inventory configuration"
+  description = "Hint for Ansible inventory configuration"
   value       = <<-EOT
-    # Add to your Ansible inventory (aws_ssm.yml):
-    # 
-    # plugin: amazon.aws.aws_ec2
-    # regions:
-    #   - us-west-2
-    # filters:
-    #   tag:Ansible: ziti-${var.environment}
-    #   instance-state-name: running
+    # Preferred: Use Ziti overlay (requires ZDE running)
+    # ansible_host: ssh.ziti-${var.environment}.ziti
+    #
+    # Fallback: Use EICE tunnel
+    # ProxyCommand: aws ec2-instance-connect open-tunnel --instance-id ${aws_instance.ziti.id}
   EOT
+}
+
+# =============================================================================
+# Ziti Service Discovery
+# =============================================================================
+
+output "ziti_ssh_hostname" {
+  description = "Ziti synthetic DNS name for SSH access"
+  value       = "ssh.ziti-${var.environment}.ziti"
+}
+
+output "ziti_environment" {
+  description = "Ziti environment name (for service naming)"
+  value       = var.environment
 }

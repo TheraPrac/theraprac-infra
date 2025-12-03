@@ -302,16 +302,42 @@ resource "aws_instance" "ziti" {
     }
   }
 
-  # NO user_data - Ziti is installed and configured via Ansible
-  # See: ansible/ziti-nonprod/playbook.yml
+  # Create admin users with SSH keys at boot
+  # Ziti software is installed and configured via Ansible after boot
+  user_data = <<-EOF
+    #!/bin/bash
+    set -e
+    
+    # Create ansible user for automation
+    useradd -m -s /bin/bash ansible
+    mkdir -p /home/ansible/.ssh
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID29BNMdcwcxSV3Q6+Z6vSmekjBv2vtjiCqAvZT/g7j1 ansible@theraprac.com" > /home/ansible/.ssh/authorized_keys
+    chown -R ansible:ansible /home/ansible/.ssh
+    chmod 700 /home/ansible/.ssh
+    chmod 600 /home/ansible/.ssh/authorized_keys
+    echo "ansible ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/ansible
+    chmod 440 /etc/sudoers.d/ansible
+    
+    # Create jfinlinson user for admin access
+    useradd -m -s /bin/bash jfinlinson
+    mkdir -p /home/jfinlinson/.ssh
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFbKgvFxem5Ga2UzKNDY2EW+3BkYkWOQzyuSC+DOZLrr jfinlinson@theraprac.com" > /home/jfinlinson/.ssh/authorized_keys
+    chown -R jfinlinson:jfinlinson /home/jfinlinson/.ssh
+    chmod 700 /home/jfinlinson/.ssh
+    chmod 600 /home/jfinlinson/.ssh/authorized_keys
+    echo "jfinlinson ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/jfinlinson
+    chmod 440 /etc/sudoers.d/jfinlinson
+  EOF
 
   # Basic monitoring only (detailed monitoring costs extra)
   monitoring = false
 
   tags = {
-    Name    = "ziti-${var.environment}"
-    Role    = "ziti-server"
-    Ansible = "ziti-${var.environment}"
+    Name        = "ziti-${var.environment}"
+    Role        = "ziti-server"
+    Ansible     = "ziti-${var.environment}"
+    ZitiSSH     = "ssh.ziti-${var.environment}.ziti"
+    Environment = var.environment
   }
 }
 
