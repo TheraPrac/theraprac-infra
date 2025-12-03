@@ -69,3 +69,7 @@ id_ed25519
 
 # Ansible inventory cache
 /tmp/aws_ec2_cache
+
+# Terraform variables with secrets
+*.tfvars
+!*.tfvars.example

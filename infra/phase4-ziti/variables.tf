@@ -53,6 +53,24 @@ variable "instance_type" {
 }
 
 # -----------------------------------------------------------------------------
+# SSH Keys for Admin Users
+# -----------------------------------------------------------------------------
+# These keys are injected via user_data at instance boot.
+# Store actual keys in terraform.tfvars (gitignored) or pass via CLI.
+
+variable "ssh_key_ansible" {
+  description = "SSH public key for ansible automation user"
+  type        = string
+  sensitive   = true
+}
+
+variable "ssh_key_jfinlinson" {
+  description = "SSH public key for jfinlinson admin user"
+  type        = string
+  sensitive   = true
+}
+
+# -----------------------------------------------------------------------------
 # Tags
 # -----------------------------------------------------------------------------
 

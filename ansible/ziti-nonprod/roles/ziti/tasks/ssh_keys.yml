@@ -3,22 +3,41 @@
 # =============================================================================
 # Adds authorized SSH keys for admin access via Ziti overlay.
 # Keys are defined in defaults/main.yml or passed as variables.
+#
+# NOTE: Primary SSH key injection happens via Terraform user_data at boot.
+# This task is for adding additional keys or updating existing instances.
 # =============================================================================
 
 ---
-- name: Ensure .ssh directory exists
+- name: Ensure .ssh directory exists for ansible user
   ansible.builtin.file:
-    path: /home/ec2-user/.ssh
+    path: /home/ansible/.ssh
     state: directory
-    owner: ec2-user
-    group: ec2-user
+    owner: ansible
+    group: ansible
     mode: '0700'
 
-- name: Add authorized SSH keys
+- name: Add authorized SSH keys for ansible user
   ansible.builtin.authorized_key:
-    user: ec2-user
+    user: ansible
     key: "{{ item }}"
     state: present
   loop: "{{ ziti_authorized_ssh_keys }}"
   when: ziti_authorized_ssh_keys is defined and ziti_authorized_ssh_keys | length > 0
 
+- name: Ensure .ssh directory exists for jfinlinson user
+  ansible.builtin.file:
+    path: /home/jfinlinson/.ssh
+    state: directory
+    owner: jfinlinson
+    group: jfinlinson
+    mode: '0700'
+
+- name: Add authorized SSH keys for jfinlinson user
+  ansible.builtin.authorized_key:
+    user: jfinlinson
+    key: "{{ item }}"
+    state: present
+  loop: "{{ ziti_authorized_ssh_keys_admin | default(ziti_authorized_ssh_keys) }}"
+  when: (ziti_authorized_ssh_keys_admin is defined and ziti_authorized_ssh_keys_admin | length > 0) or 
+        (ziti_authorized_ssh_keys is defined and ziti_authorized_ssh_keys | length > 0)

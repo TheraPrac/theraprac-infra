@@ -304,6 +304,7 @@ resource "aws_instance" "ziti" {
 
   # Create admin users with SSH keys at boot
   # Ziti software is installed and configured via Ansible after boot
+  # SSH keys are passed via variables (marked sensitive) to avoid state exposure
   user_data = <<-EOF
     #!/bin/bash
     set -e
@@ -311,7 +312,7 @@ resource "aws_instance" "ziti" {
     # Create ansible user for automation
     useradd -m -s /bin/bash ansible
     mkdir -p /home/ansible/.ssh
-    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID29BNMdcwcxSV3Q6+Z6vSmekjBv2vtjiCqAvZT/g7j1 ansible@theraprac.com" > /home/ansible/.ssh/authorized_keys
+    echo "${var.ssh_key_ansible}" > /home/ansible/.ssh/authorized_keys
     chown -R ansible:ansible /home/ansible/.ssh
     chmod 700 /home/ansible/.ssh
     chmod 600 /home/ansible/.ssh/authorized_keys
@@ -321,7 +322,7 @@ resource "aws_instance" "ziti" {
     # Create jfinlinson user for admin access
     useradd -m -s /bin/bash jfinlinson
     mkdir -p /home/jfinlinson/.ssh
-    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFbKgvFxem5Ga2UzKNDY2EW+3BkYkWOQzyuSC+DOZLrr jfinlinson@theraprac.com" > /home/jfinlinson/.ssh/authorized_keys
+    echo "${var.ssh_key_jfinlinson}" > /home/jfinlinson/.ssh/authorized_keys
     chown -R jfinlinson:jfinlinson /home/jfinlinson/.ssh
     chmod 700 /home/jfinlinson/.ssh
     chmod 600 /home/jfinlinson/.ssh/authorized_keys
