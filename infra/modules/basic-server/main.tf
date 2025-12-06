@@ -3,11 +3,13 @@
 # =============================================================================
 # Creates a private EC2 instance with:
 #   - No public IP (private subnet only)
-#   - SSH access only from EICE and Ziti router
+#   - SSH access only from EICE (break-glass)
+#   - ziti-edge-tunnel installed for self-hosted Ziti services
 #   - ansible + jfinlinson users created via user_data
 #   - Private DNS record in theraprac-internal.com
 #
-# Access is via Ziti SSH (primary) or EC2 Instance Connect (break-glass).
+# The server runs ziti-edge-tunnel in host mode and self-registers its
+# endpoints (e.g., SSH) via the Ziti controller API.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -18,11 +20,11 @@ locals {
   # Naming convention: name.role.environment
   full_name   = "${var.name}.${var.role}.${var.environment}"
   hyphen_name = "${var.name}-${var.role}-${var.environment}"
-  
+
   # DNS names
   internal_dns = "${local.hyphen_name}.${var.internal_zone_name}"
   ziti_ssh     = "ssh.${local.full_name}.ziti"
-  
+
   # Tags
   default_tags = {
     Name        = local.hyphen_name
@@ -62,49 +64,11 @@ data "aws_ami" "amazon_linux_2023" {
 # -----------------------------------------------------------------------------
 # Security Group
 # -----------------------------------------------------------------------------
+# Use provided security group ID (shared security group from phase7)
+# The shared security group and its rules are managed in phase7-basic-server/main.tf
 
-resource "aws_security_group" "server" {
-  name        = "basic-server-${local.hyphen_name}"
-  description = "Security group for basic server ${local.full_name}"
-  vpc_id      = var.vpc_id
-
-  tags = merge(local.default_tags, var.common_tags, {
-    Name = "basic-server-${local.hyphen_name}-sg"
-  })
-}
-
-# Inbound: SSH from EC2 Instance Connect Endpoint
-resource "aws_vpc_security_group_ingress_rule" "ssh_from_eice" {
-  security_group_id            = aws_security_group.server.id
-  description                  = "Allow SSH from EC2 Instance Connect Endpoint"
-  ip_protocol                  = "tcp"
-  from_port                    = 22
-  to_port                      = 22
-  referenced_security_group_id = var.eice_security_group_id
-
-  tags = { Name = "${local.hyphen_name}-ssh-from-eice" }
-}
-
-# Inbound: SSH from Ziti subnet (router needs to reach this server)
-resource "aws_vpc_security_group_ingress_rule" "ssh_from_ziti" {
-  security_group_id = aws_security_group.server.id
-  description       = "Allow SSH from Ziti router subnet"
-  ip_protocol       = "tcp"
-  from_port         = 22
-  to_port           = 22
-  cidr_ipv4         = var.ziti_subnet_cidr
-
-  tags = { Name = "${local.hyphen_name}-ssh-from-ziti" }
-}
-
-# Outbound: All traffic (for package updates, SSM, etc.)
-resource "aws_vpc_security_group_egress_rule" "all_outbound" {
-  security_group_id = aws_security_group.server.id
-  description       = "Allow all outbound traffic"
-  ip_protocol       = "-1"
-  cidr_ipv4         = "0.0.0.0/0"
-
-  tags = { Name = "${local.hyphen_name}-all-outbound" }
+locals {
+  security_group_id = var.security_group_id
 }
 
 # -----------------------------------------------------------------------------
@@ -115,7 +79,7 @@ resource "aws_instance" "server" {
   ami                         = data.aws_ami.amazon_linux_2023.id
   instance_type               = var.instance_type
   subnet_id                   = var.subnet_id
-  vpc_security_group_ids      = [aws_security_group.server.id]
+  vpc_security_group_ids      = [local.security_group_id]
   iam_instance_profile        = var.instance_profile_name
   associate_public_ip_address = false
 
@@ -131,9 +95,18 @@ resource "aws_instance" "server" {
   }
 
   # Create admin users with SSH keys at boot
+  # All Ziti installation and configuration is handled by Ansible
   user_data = <<-EOF
     #!/bin/bash
     set -e
+    
+    # Log all output for debugging
+    exec > >(tee /var/log/user-data.log) 2>&1
+    echo "Starting user-data script at $(date)"
+    
+    # ==========================================================================
+    # Create Users
+    # ==========================================================================
     
     # Create ansible user for automation
     useradd -m -s /bin/bash ansible
@@ -158,6 +131,21 @@ resource "aws_instance" "server" {
     # Disable password authentication
     sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
     systemctl restart sshd
+    
+    # ==========================================================================
+    # Store Controller Endpoint for Ansible
+    # ==========================================================================
+    
+    mkdir -p /opt/ziti/cfg
+    echo "${var.ziti_controller_endpoint}" > /opt/ziti/cfg/controller_endpoint
+    chmod 644 /opt/ziti/cfg/controller_endpoint
+    
+    # ==========================================================================
+    # Done
+    # ==========================================================================
+    
+    echo "User-data script completed successfully at $(date)"
+    echo "Ziti installation and configuration will be handled by Ansible"
   EOF
 
   monitoring = false
@@ -180,4 +168,5 @@ resource "aws_route53_record" "private" {
   ttl     = 300
   records = [aws_instance.server.private_ip]
 }
+
 

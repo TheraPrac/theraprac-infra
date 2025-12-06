@@ -1,0 +1,94 @@
+# =============================================================================
+# Ziti Enroll Role - Enroll Identity on Server
+# =============================================================================
+# This role enrolls the Ziti identity on the basic server using the JWT
+# generated in the ziti-identity role.
+#
+# Required variables:
+#   - ziti_identity_name: Name of the identity (e.g., basic-server-app-mt-nonprod)
+#   - ziti_enrollment_jwt: JWT content (from ziti-identity role)
+# =============================================================================
+
+---
+# =============================================================================
+# Check Prerequisites
+# =============================================================================
+
+- name: Verify ziti CLI is installed
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti version
+  register: ziti_version
+  changed_when: false
+
+- name: Display Ziti version
+  ansible.builtin.debug:
+    msg: "Ziti CLI: {{ ziti_version.stdout }}"
+
+# =============================================================================
+# Check for Existing Enrollment
+# =============================================================================
+
+- name: Check if identity is already enrolled
+  ansible.builtin.stat:
+    path: /opt/ziti/cfg/{{ ziti_identity_name }}.json
+  register: identity_file
+
+- name: Remove existing identity file for re-enrollment
+  ansible.builtin.file:
+    path: /opt/ziti/cfg/{{ ziti_identity_name }}.json
+    state: absent
+  when: identity_file.stat.exists
+
+# =============================================================================
+# Write JWT and Enroll
+# =============================================================================
+
+- name: Write JWT file for enrollment
+  ansible.builtin.copy:
+    content: "{{ ziti_enrollment_jwt }}"
+    dest: /tmp/{{ ziti_identity_name }}.jwt
+    mode: '0600'
+  no_log: true
+
+- name: Enroll identity
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge enroll
+      --jwt /tmp/{{ ziti_identity_name }}.jwt
+      --out /opt/ziti/cfg/{{ ziti_identity_name }}.json
+  register: enroll_result
+
+- name: Clean up JWT file
+  ansible.builtin.file:
+    path: /tmp/{{ ziti_identity_name }}.jwt
+    state: absent
+
+# =============================================================================
+# Verify Enrollment
+# =============================================================================
+
+- name: Verify identity file was created
+  ansible.builtin.stat:
+    path: /opt/ziti/cfg/{{ ziti_identity_name }}.json
+  register: enrolled_identity
+
+- name: Fail if enrollment unsuccessful
+  ansible.builtin.fail:
+    msg: "Identity enrollment failed - no identity file created"
+  when: not enrolled_identity.stat.exists
+
+- name: Set proper permissions on identity file
+  ansible.builtin.file:
+    path: /opt/ziti/cfg/{{ ziti_identity_name }}.json
+    mode: '0600'
+    owner: root
+    group: root
+
+- name: Display enrollment status
+  ansible.builtin.debug:
+    msg: |
+      Ziti Identity Enrolled:
+      - Name: {{ ziti_identity_name }}
+      - Identity file: /opt/ziti/cfg/{{ ziti_identity_name }}.json
+      - Ready for service registration
+

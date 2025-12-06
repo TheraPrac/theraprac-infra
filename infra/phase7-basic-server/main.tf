@@ -89,15 +89,53 @@ locals {
     "ziti.prod"    = data.terraform_remote_state.vpc.outputs.private_ziti_prod_subnet_ids_by_az["az1"]
   }
 
-  # Ziti subnet CIDR for security group rules
-  # The Ziti router needs to reach basic servers on port 22
-  ziti_subnet_cidr_map = {
-    "nonprod" = "10.20.30.0/24"
-    "prod"    = "10.20.70.0/24"
-  }
+  subnet_id = local.subnet_map["${var.tier}.${var.environment}"]
+}
 
-  subnet_id        = local.subnet_map["${var.tier}.${var.environment}"]
-  ziti_subnet_cidr = local.ziti_subnet_cidr_map[var.environment]
+# =============================================================================
+# Shared Security Group for Basic Servers
+# =============================================================================
+# All basic servers share the same security group rules:
+#   - SSH from EICE (break-glass access)
+#   - All outbound traffic
+# =============================================================================
+
+resource "aws_security_group" "basic_servers" {
+  name        = "shared-basic-servers-${var.environment}"
+  description = "Shared security group for all basic servers in ${var.environment}. Rules: SSH from EICE, all outbound."
+  vpc_id      = data.terraform_remote_state.vpc.outputs.vpc_id
+
+  tags = merge(var.common_tags, {
+    Name        = "shared-basic-servers-${var.environment}-sg"
+    Environment = var.environment
+    Purpose     = "shared-basic-server-sg"
+  })
+}
+
+# Inbound: SSH from EC2 Instance Connect Endpoint (break-glass access)
+resource "aws_vpc_security_group_ingress_rule" "ssh_from_eice" {
+  security_group_id            = aws_security_group.basic_servers.id
+  description                  = "Allow SSH from EC2 Instance Connect Endpoint"
+  ip_protocol                  = "tcp"
+  from_port                    = 22
+  to_port                      = 22
+  referenced_security_group_id = data.terraform_remote_state.ziti.outputs.eice_security_group_id
+
+  tags = {
+    Name = "shared-basic-servers-ssh-from-eice-${var.environment}"
+  }
+}
+
+# Outbound: All traffic (for package updates, SSM, Ziti enrollment, etc.)
+resource "aws_vpc_security_group_egress_rule" "all_outbound" {
+  security_group_id = aws_security_group.basic_servers.id
+  description       = "Allow all outbound traffic"
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
+
+  tags = {
+    Name = "shared-basic-servers-all-outbound-${var.environment}"
+  }
 }
 
 # =============================================================================
@@ -127,8 +165,12 @@ module "basic_server" {
   subnet_id              = local.subnet_id
   internal_zone_id       = data.terraform_remote_state.ziti.outputs.internal_zone_id
   internal_zone_name     = data.terraform_remote_state.ziti.outputs.internal_zone_name
-  eice_security_group_id = data.terraform_remote_state.ziti.outputs.eice_security_group_id
-  ziti_subnet_cidr       = local.ziti_subnet_cidr
+  
+  # Use shared security group instead of creating one per server
+  security_group_id = aws_security_group.basic_servers.id
+
+  # Ziti controller for tunneler registration
+  ziti_controller_endpoint = data.terraform_remote_state.ziti.outputs.ziti_public_url
 
   # IAM
   instance_profile_name = data.terraform_remote_state.iam.outputs.app_server_instance_profile_name
@@ -136,4 +178,5 @@ module "basic_server" {
   # Tags
   common_tags = var.common_tags
 }
+
 

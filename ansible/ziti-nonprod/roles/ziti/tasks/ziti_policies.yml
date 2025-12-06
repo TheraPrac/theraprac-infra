@@ -26,37 +26,94 @@
 # =============================================================================
 # Service Policies
 # =============================================================================
+# Handle both naming conventions: ssh-bind/ssh-dial and ssh-nonprod-bind/ssh-nonprod-dial
+# Always ensure policies use role attributes (#ssh-services, #ssh-users, #routers)
+# =============================================================================
 
-- name: Check if ssh-bind policy exists
+- name: Check for existing SSH bind policies
   ansible.builtin.shell: |
-    {{ ziti_bin }} edge list service-policies 'name="ssh-bind"' --output-json 2>/dev/null | jq -r '.data | length'
-  register: ssh_bind_policy_count
+    {{ ziti_bin }} edge list service-policies --output-json 2>/dev/null | jq -r '.data[] | select(.name | contains("ssh") and contains("bind")) | .name'
+  register: existing_bind_policies
   changed_when: false
   failed_when: false
 
-- name: Create ssh-bind service policy (routers can bind SSH services)
+- name: Check for existing SSH dial policies
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list service-policies --output-json 2>/dev/null | jq -r '.data[] | select(.name | contains("ssh") and contains("dial")) | .name'
+  register: existing_dial_policies
+  changed_when: false
+  failed_when: false
+
+- name: Get existing bind policy details
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list service-policies --output-json 2>/dev/null | jq -r '.data[] | select(.name | contains("ssh") and contains("bind")) | {name, serviceRoles: .serviceRoles} | @json'
+  register: bind_policy_details
+  changed_when: false
+  failed_when: false
+  when: existing_bind_policies.stdout != ""
+
+- name: Get existing dial policy details
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list service-policies --output-json 2>/dev/null | jq -r '.data[] | select(.name | contains("ssh") and contains("dial")) | {name, serviceRoles: .serviceRoles} | @json'
+  register: dial_policy_details
+  changed_when: false
+  failed_when: false
+  when: existing_dial_policies.stdout != ""
+
+- name: Check if bind policy uses role attributes
+  ansible.builtin.set_fact:
+    bind_policy_name: "{{ (bind_policy_details.stdout | from_json).name }}"
+    bind_needs_update: "{{ '#ssh-services' not in ((bind_policy_details.stdout | from_json).serviceRoles | default([])) }}"
+  when: 
+    - existing_bind_policies.stdout != ""
+    - bind_policy_details.stdout != ""
+
+- name: Check if dial policy uses role attributes
+  ansible.builtin.set_fact:
+    dial_policy_name: "{{ (dial_policy_details.stdout | from_json).name }}"
+    dial_needs_update: "{{ '#ssh-services' not in ((dial_policy_details.stdout | from_json).serviceRoles | default([])) }}"
+  when: 
+    - existing_dial_policies.stdout != ""
+    - dial_policy_details.stdout != ""
+
+- name: Update existing bind policy to use role attributes
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge update service-policy {{ bind_policy_name }}
+      --service-roles "#ssh-services"
+      --identity-roles "#routers"
+  when: 
+    - existing_bind_policies.stdout != ""
+    - bind_needs_update | default(false) | bool
+  register: bind_policy_updated
+
+- name: Update existing dial policy to use role attributes
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge update service-policy {{ dial_policy_name }}
+      --service-roles "#ssh-services"
+      --identity-roles "#ssh-users"
+  when: 
+    - existing_dial_policies.stdout != ""
+    - dial_needs_update | default(false) | bool
+  register: dial_policy_updated
+
+- name: Create ssh-bind service policy if none exists
   ansible.builtin.command:
     cmd: >
       {{ ziti_bin }} edge create service-policy ssh-bind Bind
       --service-roles "#ssh-services"
       --identity-roles "#routers"
-  when: ssh_bind_policy_count.stdout | default('0') | int == 0
+  when: existing_bind_policies.stdout == ""
   register: ssh_bind_policy_created
 
-- name: Check if ssh-dial policy exists
-  ansible.builtin.shell: |
-    {{ ziti_bin }} edge list service-policies 'name="ssh-dial"' --output-json 2>/dev/null | jq -r '.data | length'
-  register: ssh_dial_policy_count
-  changed_when: false
-  failed_when: false
-
-- name: Create ssh-dial service policy (ssh-users can dial SSH services)
+- name: Create ssh-dial service policy if none exists
   ansible.builtin.command:
     cmd: >
       {{ ziti_bin }} edge create service-policy ssh-dial Dial
       --service-roles "#ssh-services"
       --identity-roles "#ssh-users"
-  when: ssh_dial_policy_count.stdout | default('0') | int == 0
+  when: existing_dial_policies.stdout == ""
   register: ssh_dial_policy_created
 
 # =============================================================================
@@ -82,29 +139,61 @@
 # =============================================================================
 # Service Edge Router Policies
 # =============================================================================
+# Handle both naming conventions: ssh-service-routers and ssh-nonprod-bind
+# Always ensure policies use role attributes (#ssh-services, #all)
+# =============================================================================
 
-- name: Check if ssh-service-routers policy exists
+- name: Check for existing SSH service edge router policies
   ansible.builtin.shell: |
-    {{ ziti_bin }} edge list service-edge-router-policies 'name="ssh-service-routers"' --output-json 2>/dev/null | jq -r '.data | length'
-  register: serp_count
+    {{ ziti_bin }} edge list service-edge-router-policies --output-json 2>/dev/null | jq -r '.data[] | select(.name | contains("ssh")) | .name'
+  register: existing_serp_policies
   changed_when: false
   failed_when: false
 
-- name: Create service edge router policy (SSH services available on all routers)
+- name: Get existing service edge router policy details
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list service-edge-router-policies --output-json 2>/dev/null | jq -r '[.data[] | select(.name | contains("ssh"))]'
+  register: serp_policy_details_raw
+  changed_when: false
+  failed_when: false
+  when: existing_serp_policies.stdout != ""
+
+- name: Parse service edge router policy details
+  ansible.builtin.set_fact:
+    serp_policies: "{{ serp_policy_details_raw.stdout | from_json }}"
+  when: 
+    - existing_serp_policies.stdout != ""
+    - serp_policy_details_raw.stdout != ""
+
+- name: Update each existing service edge router policy to use role attributes
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge update service-edge-router-policy {{ item.name }}
+      --service-roles "#ssh-services"
+      --edge-router-roles "#all"
+  loop: "{{ serp_policies | default([]) }}"
+  when: 
+    - existing_serp_policies.stdout != ""
+    - serp_policies is defined
+    - "'#ssh-services' not in (item.serviceRoles | default([])) or '#all' not in (item.edgeRouterRoles | default([]))"
+  register: serp_policy_updated
+
+- name: Create ssh-service-routers service edge router policy if none exists
   ansible.builtin.command:
     cmd: >
       {{ ziti_bin }} edge create service-edge-router-policy ssh-service-routers
       --edge-router-roles "#all"
       --service-roles "#ssh-services"
-  when: serp_count.stdout | default('0') | int == 0
+  when: existing_serp_policies.stdout == ""
   register: serp_created
 
 - name: Display policy creation results
   ansible.builtin.debug:
     msg: |
       Policy Configuration:
-      - ssh-bind (Bind): {{ 'created' if ssh_bind_policy_created is changed else 'exists' }}
-      - ssh-dial (Dial): {{ 'created' if ssh_dial_policy_created is changed else 'exists' }}
+      - ssh-bind (Bind): {{ 'created' if ssh_bind_policy_created is defined and ssh_bind_policy_created is changed else ('updated' if bind_policy_updated is defined and bind_policy_updated is changed else 'exists') }}
+      - ssh-dial (Dial): {{ 'created' if ssh_dial_policy_created is defined and ssh_dial_policy_created is changed else ('updated' if dial_policy_updated is defined and dial_policy_updated is changed else 'exists') }}
       - users-to-routers (ERP): {{ 'created' if erp_created is changed else 'exists' }}
-      - ssh-service-routers (SERP): {{ 'created' if serp_created is changed else 'exists' }}
+      - ssh-service-routers (SERP): {{ 'created' if serp_created is defined and serp_created is changed else ('updated' if serp_policy_updated is defined and serp_policy_updated is changed else 'exists') }}
+
 

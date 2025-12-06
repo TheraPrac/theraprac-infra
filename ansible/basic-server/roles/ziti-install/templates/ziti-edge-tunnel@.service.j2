@@ -1,0 +1,23 @@
+[Unit]
+Description=Ziti Edge Tunnel (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/ziti/bin/ziti-edge-tunnel run -i /opt/ziti/cfg/%i.json
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/ziti/logs/%i.log
+StandardError=append:/opt/ziti/logs/%i.log
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/ziti/logs /opt/ziti/cfg
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+

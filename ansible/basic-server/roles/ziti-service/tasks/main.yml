@@ -1,0 +1,181 @@
+# =============================================================================
+# Ziti Service Role - Self-Register SSH Service
+# =============================================================================
+# This role registers the SSH service for this server using the enrolled
+# identity. It cleans up any existing services/configs and creates new ones.
+#
+# Required variables:
+#   - ziti_identity_name: Name of the identity (e.g., basic-server-app-mt-nonprod)
+#   - ziti_ssh_name: Ziti synthetic DNS for SSH (e.g., ssh.app.mt.nonprod.ziti)
+#   - server_name: Server name for service (e.g., app.mt.nonprod)
+#   - ziti_controller_endpoint: Controller URL (e.g., https://ziti-nonprod.theraprac.com)
+#   - ziti_admin_password: Admin password (from ziti-identity role)
+# =============================================================================
+
+---
+# =============================================================================
+# Login to Controller (using admin credentials for service management)
+# =============================================================================
+
+- name: Set controller URL fact
+  ansible.builtin.set_fact:
+    ziti_controller_url: "{{ ziti_controller_endpoint | default('https://ziti-nonprod.theraprac.com') }}"
+
+- name: Login to Ziti controller for service registration
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge login
+      {{ ziti_controller_url }}
+      --yes
+      --username admin
+      --password "{{ ziti_admin_password }}"
+  no_log: true
+  changed_when: true
+
+# =============================================================================
+# Cleanup Old Services and Configs
+# =============================================================================
+
+- name: Check if old service exists (by synthetic DNS name)
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list services 'name="{{ ziti_ssh_name }}"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: old_service_count
+  changed_when: false
+  failed_when: false
+
+- name: Delete old service if exists
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete service "{{ ziti_ssh_name }}"
+  when: old_service_count.stdout | default('0') | int > 0
+  register: old_service_deleted
+
+- name: Check if old host config exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list configs 'name="{{ ziti_ssh_name }}.host"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: old_host_config_count
+  changed_when: false
+  failed_when: false
+
+- name: Delete old host config if exists
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete config "{{ ziti_ssh_name }}.host"
+  when: old_host_config_count.stdout | default('0') | int > 0
+  register: old_host_config_deleted
+
+- name: Check if old intercept config exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list configs 'name="{{ ziti_ssh_name }}.intercept"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: old_intercept_config_count
+  changed_when: false
+  failed_when: false
+
+- name: Delete old intercept config if exists
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete config "{{ ziti_ssh_name }}.intercept"
+  when: old_intercept_config_count.stdout | default('0') | int > 0
+  register: old_intercept_config_deleted
+
+# =============================================================================
+# Create Host Config (host.v2 with localhost terminator)
+# =============================================================================
+
+- name: Create host.v2 config for SSH
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create config {{ ziti_ssh_name }}.host host.v2
+      '{"terminators":[{"address":"localhost","port":22,"protocol":"tcp"}]}'
+  register: host_config_created
+
+# =============================================================================
+# Create Intercept Config
+# =============================================================================
+
+- name: Create intercept.v1 config for SSH
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create config {{ ziti_ssh_name }}.intercept intercept.v1
+      '{"protocols":["tcp"],"addresses":["{{ ziti_ssh_name }}"],"portRanges":[{"low":22,"high":22}]}'
+  register: intercept_config_created
+
+# =============================================================================
+# Create Service
+# =============================================================================
+
+- name: Create SSH service with configs and role attributes
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service {{ ziti_ssh_name }}
+      --configs {{ ziti_ssh_name }}.host,{{ ziti_ssh_name }}.intercept
+      --role-attributes ssh-services
+  register: service_created
+
+# =============================================================================
+# Create Bind Policy for This Identity
+# =============================================================================
+
+- name: Check if bind policy exists for this identity
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list service-policies 'name="{{ ziti_ssh_name }}-bind"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: bind_policy_count
+  changed_when: false
+  failed_when: false
+
+- name: Delete existing bind policy if present
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete service-policy "{{ ziti_ssh_name }}-bind"
+  when: bind_policy_count.stdout | default('0') | int > 0
+
+- name: Create bind policy for this identity to host the service
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service-policy {{ ziti_ssh_name }}-bind Bind
+      --identity-roles "@{{ ziti_identity_name }}"
+      --service-roles "@{{ ziti_ssh_name }}"
+  register: bind_policy_created
+
+# =============================================================================
+# Start ziti-edge-tunnel Service
+# =============================================================================
+
+- name: Enable and start ziti-edge-tunnel service
+  ansible.builtin.systemd:
+    name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for ziti-edge-tunnel to start
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Check ziti-edge-tunnel service status
+  ansible.builtin.systemd:
+    name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
+  register: tunnel_service_status
+
+# =============================================================================
+# Summary
+# =============================================================================
+
+- name: Display service registration results
+  ansible.builtin.debug:
+    msg: |
+      Ziti SSH Service Registration Complete:
+      ========================================
+      Server Name:    {{ server_name }}
+      Identity:       {{ ziti_identity_name }}
+      SSH Address:    {{ ziti_ssh_name }}
+      
+      Components Created:
+      - Host config (host.v2): {{ ziti_ssh_name }}.host
+      - Intercept config:      {{ ziti_ssh_name }}.intercept
+      - Service:               {{ ziti_ssh_name }} (role: ssh-services)
+      - Bind policy:           {{ ziti_ssh_name }}-bind
+      
+      Tunnel Service:
+      - Unit: ziti-edge-tunnel@{{ ziti_identity_name }}
+      - Status: {{ tunnel_service_status.status.ActiveState | default('unknown') }}
+      
+      The service has role attribute #ssh-services, so existing
+      ssh-dial policies will automatically apply for users with #ssh-users role.
+

@@ -1,0 +1,227 @@
+# =============================================================================
+# Ziti Install Role - Install Ziti Binaries
+# =============================================================================
+# Installs ziti CLI and ziti-edge-tunnel binaries on the server.
+# This runs before identity enrollment and service registration.
+# =============================================================================
+
+---
+# =============================================================================
+# Install Prerequisites
+# =============================================================================
+
+- name: Install required packages
+  ansible.builtin.dnf:
+    name:
+      - jq
+      - tar
+      - unzip
+    state: present
+  # Note: curl is not needed - curl-minimal is already installed on Amazon Linux 2023
+
+# =============================================================================
+# Detect Architecture
+# =============================================================================
+
+- name: Detect system architecture
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  register: system_facts
+
+- name: Set Ziti architecture based on system
+  ansible.builtin.set_fact:
+    ziti_arch: "{{ 'arm64' if (ansible_architecture == 'aarch64') else ('amd64' if (ansible_architecture == 'x86_64') else 'unknown') }}"
+
+- name: Fail if architecture is unsupported
+  ansible.builtin.fail:
+    msg: "Unsupported architecture: {{ ansible_architecture }}"
+  when: ziti_arch == 'unknown'
+
+- name: Display detected architecture
+  ansible.builtin.debug:
+    msg: "Detected architecture: {{ ansible_architecture }} -> {{ ziti_arch }}"
+
+# =============================================================================
+# Get Latest Ziti Version
+# =============================================================================
+
+- name: Get latest Ziti version from GitHub
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/openziti/ziti/releases
+    method: GET
+    return_content: true
+  register: ziti_releases
+
+- name: Extract non-prerelease versions
+  ansible.builtin.set_fact:
+    non_prerelease_versions: "{{ ziti_releases.json | selectattr('prerelease', 'equalto', false) | map(attribute='tag_name') | map('regex_replace', '^v', '') | list }}"
+
+- name: Sort versions using shell (semantic version sort)
+  ansible.builtin.shell: |
+    printf '%s\n' {{ non_prerelease_versions | join(' ') }} | sort -V | tail -1
+  register: ziti_version_raw
+  changed_when: false
+
+- name: Set Ziti version fact
+  ansible.builtin.set_fact:
+    ziti_version: "{{ ziti_version_raw.stdout | trim }}"
+
+- name: Fail if version not found
+  ansible.builtin.fail:
+    msg: "Failed to determine latest Ziti version"
+  when: ziti_version == ''
+
+- name: Display Ziti version
+  ansible.builtin.debug:
+    msg: "Latest Ziti version: {{ ziti_version }}"
+
+# =============================================================================
+# Create Ziti Directories
+# =============================================================================
+
+- name: Create Ziti directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /opt/ziti/bin
+    - /opt/ziti/cfg
+    - /opt/ziti/logs
+
+# =============================================================================
+# Download and Install Ziti CLI
+# =============================================================================
+
+- name: Check if Ziti CLI already installed
+  ansible.builtin.stat:
+    path: /opt/ziti/bin/ziti
+  register: ziti_cli_exists
+
+- name: Download Ziti CLI
+  ansible.builtin.get_url:
+    url: "https://github.com/openziti/ziti/releases/download/v{{ ziti_version }}/ziti-linux-{{ ziti_arch }}-{{ ziti_version }}.tar.gz"
+    dest: /tmp/ziti-linux-{{ ziti_arch }}.tar.gz
+    mode: '0644'
+  when: not ziti_cli_exists.stat.exists
+
+- name: Extract Ziti CLI
+  ansible.builtin.unarchive:
+    src: /tmp/ziti-linux-{{ ziti_arch }}.tar.gz
+    dest: /tmp
+    remote_src: true
+    creates: /tmp/ziti
+  when: not ziti_cli_exists.stat.exists
+
+- name: Install Ziti CLI binary
+  ansible.builtin.copy:
+    src: /tmp/ziti
+    dest: /opt/ziti/bin/ziti
+    mode: '0755'
+    owner: root
+    group: root
+    remote_src: true
+  when: not ziti_cli_exists.stat.exists
+
+- name: Create symlink for Ziti CLI
+  ansible.builtin.file:
+    src: /opt/ziti/bin/ziti
+    dest: /usr/local/bin/ziti
+    state: link
+    force: true
+
+- name: Clean up Ziti CLI temp files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/ziti-linux-{{ ziti_arch }}.tar.gz
+    - /tmp/ziti
+
+# =============================================================================
+# Download and Install ziti-edge-tunnel
+# =============================================================================
+
+- name: Check if ziti-edge-tunnel already installed
+  ansible.builtin.stat:
+    path: /opt/ziti/bin/ziti-edge-tunnel
+  register: ziti_tunnel_exists
+
+- name: Download ziti-edge-tunnel
+  ansible.builtin.get_url:
+    url: "https://github.com/openziti/ziti-tunnel-sdk-c/releases/latest/download/ziti-edge-tunnel-Linux_{{ ziti_arch }}.zip"
+    dest: /tmp/ziti-edge-tunnel-Linux_{{ ziti_arch }}.zip
+    mode: '0644'
+  when: not ziti_tunnel_exists.stat.exists
+
+- name: Extract ziti-edge-tunnel
+  ansible.builtin.unarchive:
+    src: /tmp/ziti-edge-tunnel-Linux_{{ ziti_arch }}.zip
+    dest: /opt/ziti/bin
+    remote_src: true
+    creates: /opt/ziti/bin/ziti-edge-tunnel
+  when: not ziti_tunnel_exists.stat.exists
+
+- name: Set permissions on ziti-edge-tunnel
+  ansible.builtin.file:
+    path: /opt/ziti/bin/ziti-edge-tunnel
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create symlink for ziti-edge-tunnel
+  ansible.builtin.file:
+    src: /opt/ziti/bin/ziti-edge-tunnel
+    dest: /usr/local/bin/ziti-edge-tunnel
+    state: link
+    force: true
+
+- name: Clean up ziti-edge-tunnel temp files
+  ansible.builtin.file:
+    path: /tmp/ziti-edge-tunnel-Linux_{{ ziti_arch }}.zip
+    state: absent
+
+# =============================================================================
+# Create systemd Service Template
+# =============================================================================
+
+- name: Create systemd service template for ziti-edge-tunnel
+  ansible.builtin.template:
+    src: ziti-edge-tunnel@.service.j2
+    dest: /etc/systemd/system/ziti-edge-tunnel@.service
+    mode: '0644'
+    owner: root
+    group: root
+  notify: reload systemd
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# =============================================================================
+# Verify Installation
+# =============================================================================
+
+- name: Verify Ziti CLI installation
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti version
+  register: ziti_version_output
+  changed_when: false
+
+- name: Display Ziti CLI version
+  ansible.builtin.debug:
+    msg: "Ziti CLI: {{ ziti_version_output.stdout }}"
+
+- name: Verify ziti-edge-tunnel installation
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti-edge-tunnel version
+  register: ziti_tunnel_version_output
+  changed_when: false
+
+- name: Display ziti-edge-tunnel version
+  ansible.builtin.debug:
+    msg: "ziti-edge-tunnel: {{ ziti_tunnel_version_output.stdout }}"
+

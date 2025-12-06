@@ -1,0 +1,111 @@
+# =============================================================================
+# Ziti Identity Role - Create Identity on Controller
+# =============================================================================
+# This role connects to the Ziti controller (via API) and creates an identity
+# for the basic server. The identity JWT is then transferred to the server.
+#
+# Required variables:
+#   - ziti_controller_endpoint: Ziti controller URL (e.g., https://ziti-nonprod.theraprac.com)
+#   - ziti_identity_name: Name for the identity (e.g., basic-server-app-mt-nonprod)
+#   - ziti_ssh_name: Ziti synthetic DNS for SSH (e.g., ssh.app.mt.nonprod.ziti)
+# =============================================================================
+
+---
+# =============================================================================
+# Connect to Ziti Controller API
+# =============================================================================
+# These tasks run on the server but connect to the Ziti controller API
+# to create the identity and generate JWT
+
+- name: Set controller endpoint fact
+  ansible.builtin.set_fact:
+    ziti_controller_url: "{{ ziti_controller_endpoint | default('https://ziti-nonprod.theraprac.com') }}"
+
+# =============================================================================
+# Get Admin Credentials from AWS Secrets Manager
+# =============================================================================
+# The server uses its IAM instance profile to access Secrets Manager directly.
+
+- name: Get admin password from AWS Secrets Manager
+  ansible.builtin.command:
+    cmd: >
+      aws secretsmanager get-secret-value
+      --secret-id ziti/nonprod/admin-password
+      --query 'SecretString'
+      --output text
+      --region us-west-2
+  register: sm_secret_result
+  no_log: true
+  changed_when: false
+
+- name: Set admin password fact
+  ansible.builtin.set_fact:
+    ziti_admin_password: "{{ sm_secret_result.stdout | trim }}"
+  no_log: true
+
+# =============================================================================
+# Login to Ziti Controller
+# =============================================================================
+
+- name: Login to Ziti controller
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge login
+      {{ ziti_controller_url }}
+      --yes
+      --username admin
+      --password "{{ ziti_admin_password }}"
+  no_log: true
+  changed_when: true
+
+# =============================================================================
+# Check for Existing Identity
+# =============================================================================
+
+- name: Check if identity already exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list identities 'name="{{ ziti_identity_name }}"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: identity_count
+  changed_when: false
+  failed_when: false
+
+- name: Delete existing identity if present (for clean re-provisioning)
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete identity "{{ ziti_identity_name }}"
+  when: identity_count.stdout | default('0') | int > 0
+  register: identity_deleted
+
+# =============================================================================
+# Create New Identity
+# =============================================================================
+
+- name: Create new identity for basic server
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create identity device "{{ ziti_identity_name }}"
+      --role-attributes basic-servers
+      --jwt-output-file /tmp/{{ ziti_identity_name }}.jwt
+  register: identity_created
+
+- name: Read JWT file content
+  ansible.builtin.slurp:
+    src: /tmp/{{ ziti_identity_name }}.jwt
+  register: jwt_content
+
+- name: Store JWT in variable for later use
+  ansible.builtin.set_fact:
+    ziti_enrollment_jwt: "{{ jwt_content.content | b64decode }}"
+
+- name: Clean up JWT file on server
+  ansible.builtin.file:
+    path: /tmp/{{ ziti_identity_name }}.jwt
+    state: absent
+
+- name: Display identity creation status
+  ansible.builtin.debug:
+    msg: |
+      Ziti Identity Created:
+      - Name: {{ ziti_identity_name }}
+      - Role Attributes: basic-servers
+      - JWT generated and ready for enrollment
+

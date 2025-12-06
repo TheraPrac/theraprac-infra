@@ -15,3 +15,4 @@ all:
       ansible_ssh_private_key_file: ~/.ssh/id_ed25519_ansible_1
       ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
 
+

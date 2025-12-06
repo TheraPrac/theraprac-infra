@@ -58,9 +58,9 @@ variable "arch" {
 }
 
 variable "root_volume_size" {
-  description = "Root volume size in GB"
+  description = "Root volume size in GB (minimum 30GB for Amazon Linux 2023)"
   type        = number
-  default     = 20
+  default     = 30
 }
 
 # -----------------------------------------------------------------------------
@@ -109,13 +109,13 @@ variable "internal_zone_name" {
   default     = "theraprac-internal.com"
 }
 
-variable "eice_security_group_id" {
-  description = "Security group ID of EC2 Instance Connect Endpoint"
+variable "security_group_id" {
+  description = "Security group ID to use for the server (shared security group from phase7)"
   type        = string
 }
 
-variable "ziti_subnet_cidr" {
-  description = "CIDR of Ziti subnet (for SSH access from router)"
+variable "ziti_controller_endpoint" {
+  description = "Ziti controller endpoint URL (e.g., https://ziti-nonprod.theraprac.com)"
   type        = string
 }
 
@@ -137,4 +137,5 @@ variable "common_tags" {
   type        = map(string)
   default     = {}
 }
+
 

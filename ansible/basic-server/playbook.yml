@@ -1,130 +1,90 @@
 # =============================================================================
 # TheraPrac Infrastructure - Basic Server Ansible Playbook
 # =============================================================================
-# Registers a Ziti SSH service for a basic server.
-# Called by scripts/provision-basic-server.sh after Terraform creates the EC2.
+# Provisions a basic server with Ziti tunneler for self-hosted SSH access.
+# Runs ON the basic server (via EICE), not on the Ziti controller.
+#
+# This playbook:
+#   1. Creates a Ziti identity for the server (via controller API)
+#   2. Enrolls the identity on the server
+#   3. Registers the SSH service (self-registration via tunneler)
+#   4. Starts ziti-edge-tunnel service
 #
 # Required variables (passed via -e):
 #   - server_name: Full name (e.g., app.mt.nonprod)
-#   - server_internal_dns: Internal DNS (e.g., app-mt-nonprod.theraprac-internal.com)
 #   - ziti_ssh_name: Ziti synthetic DNS (e.g., ssh.app.mt.nonprod.ziti)
+#   - ziti_identity_name: Identity name (e.g., basic-server-app-mt-nonprod)
+#   - ziti_controller_endpoint: Controller URL (e.g., https://ziti-nonprod.theraprac.com)
+#
+# Usage:
+#   ansible-playbook -i inventory/server-eice.yml playbook.yml \
+#     -e "server_name=app.mt.nonprod" \
+#     -e "ziti_ssh_name=ssh.app.mt.nonprod.ziti" \
+#     -e "ziti_identity_name=basic-server-app-mt-nonprod" \
+#     -e "ziti_controller_endpoint=https://ziti-nonprod.theraprac.com"
 # =============================================================================
 
 ---
-- name: Register Ziti SSH Service for Basic Server
-  hosts: ziti-nonprod
+- name: Provision Basic Server with Ziti Tunneler
+  hosts: basic-server
   become: true
-  vars:
-    ziti_bin: /opt/ziti/bin/ziti
-    ziti_controller_port: 443
-    ziti_admin_user: admin
 
   tasks:
     # =========================================================================
-    # Get Admin Password
+    # Role: ziti-install - Install Ziti binaries
     # =========================================================================
-    
-    - name: Read admin password from file
-      ansible.builtin.slurp:
-        src: /opt/ziti/controller/.admin_password
-      register: admin_pass_b64
 
-    - name: Set password fact
-      ansible.builtin.set_fact:
-        ziti_admin_password: "{{ admin_pass_b64.content | b64decode | trim }}"
-      no_log: true
+    - name: Include ziti-install role
+      ansible.builtin.include_role:
+        name: ziti-install
 
     # =========================================================================
-    # Login to Ziti Controller
+    # Role: ziti-identity - Create identity on controller (via API from server)
     # =========================================================================
-    
-    - name: Login to Ziti controller
-      ansible.builtin.command:
-        cmd: >
-          {{ ziti_bin }} edge login
-          https://127.0.0.1:{{ ziti_controller_port }}
-          --yes
-          --username {{ ziti_admin_user }}
-          --password "{{ ziti_admin_password }}"
-      no_log: true
-      changed_when: true
+
+    - name: Include ziti-identity role
+      ansible.builtin.include_role:
+        name: ziti-identity
 
     # =========================================================================
-    # Create Host Config
+    # Role: ziti-enroll - Enroll identity on server
     # =========================================================================
-    
-    - name: Check if host config exists
-      ansible.builtin.shell: |
-        {{ ziti_bin }} edge list configs 'name="{{ ziti_ssh_name }}.host"' --output-json 2>/dev/null | jq -r '.data | length'
-      register: host_config_count
-      changed_when: false
-      failed_when: false
 
-    - name: Create host config
-      ansible.builtin.command:
-        cmd: >
-          {{ ziti_bin }} edge create config {{ ziti_ssh_name }}.host host.v1
-          '{"protocol":"tcp", "address":"{{ server_internal_dns }}", "port":22}'
-      when: host_config_count.stdout | default('0') | int == 0
-      register: host_config_created
+    - name: Include ziti-enroll role
+      ansible.builtin.include_role:
+        name: ziti-enroll
 
     # =========================================================================
-    # Create Intercept Config
+    # Role: ziti-service - Register SSH service
     # =========================================================================
-    
-    - name: Check if intercept config exists
-      ansible.builtin.shell: |
-        {{ ziti_bin }} edge list configs 'name="{{ ziti_ssh_name }}.intercept"' --output-json 2>/dev/null | jq -r '.data | length'
-      register: intercept_config_count
-      changed_when: false
-      failed_when: false
 
-    - name: Create intercept config
-      ansible.builtin.command:
-        cmd: >
-          {{ ziti_bin }} edge create config {{ ziti_ssh_name }}.intercept intercept.v1
-          '{"protocols":["tcp"], "addresses":["{{ ziti_ssh_name }}"], "portRanges":[{"low":22, "high":22}]}'
-      when: intercept_config_count.stdout | default('0') | int == 0
-      register: intercept_config_created
+    - name: Include ziti-service role
+      ansible.builtin.include_role:
+        name: ziti-service
 
     # =========================================================================
-    # Create Service
+    # Final Summary
     # =========================================================================
-    
-    - name: Check if service exists
-      ansible.builtin.shell: |
-        {{ ziti_bin }} edge list services 'name="{{ server_name }}"' --output-json 2>/dev/null | jq -r '.data | length'
-      register: service_count
-      changed_when: false
-      failed_when: false
 
-    - name: Create service with ssh-services role attribute
-      ansible.builtin.command:
-        cmd: >
-          {{ ziti_bin }} edge create service {{ server_name }}
-          --configs {{ ziti_ssh_name }}.host,{{ ziti_ssh_name }}.intercept
-          --role-attributes ssh-services
-      when: service_count.stdout | default('0') | int == 0
-      register: service_created
-
-    # =========================================================================
-    # Summary
-    # =========================================================================
-    
-    - name: Display registration results
+    - name: Display final summary
       ansible.builtin.debug:
         msg: |
-          Ziti SSH Service Registration:
-          ==============================
-          Server Name:    {{ server_name }}
-          Internal DNS:   {{ server_internal_dns }}
-          Ziti SSH Name:  {{ ziti_ssh_name }}
+          ============================================================
+          Basic Server Provisioning Complete!
+          ============================================================
           
-          Components:
-          - Host config:      {{ 'created' if host_config_created is changed else 'exists' }}
-          - Intercept config: {{ 'created' if intercept_config_created is changed else 'exists' }}
-          - Service:          {{ 'created' if service_created is changed else 'exists' }}
+          Server:     {{ server_name }}
+          Identity:   {{ ziti_identity_name }}
           
-          The service has role attribute #ssh-services, so existing
-          ssh-bind and ssh-dial policies will automatically apply.
-
+          SSH Access via Ziti:
+            ssh jfinlinson@{{ ziti_ssh_name }}
+          
+          SSH Access via EICE (break-glass):
+            aws ec2-instance-connect ssh --instance-id <id> --os-user jfinlinson --connection-type eice
+          
+          Service Status:
+            systemctl status ziti-edge-tunnel@{{ ziti_identity_name }}
+          
+          Logs:
+            tail -f /opt/ziti/logs/{{ ziti_identity_name }}.log
+          ============================================================

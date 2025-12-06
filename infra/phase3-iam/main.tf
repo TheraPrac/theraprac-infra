@@ -125,7 +125,10 @@ data "aws_iam_policy_document" "secrets_readonly" {
       "secretsmanager:GetSecretValue",
       "secretsmanager:DescribeSecret",
     ]
-    resources = [local.secrets_arn_pattern]
+    resources = [
+      local.secrets_arn_pattern,
+      "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:ziti/${var.environment}/*"
+    ]
   }
 }
 

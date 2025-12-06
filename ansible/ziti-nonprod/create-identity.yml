@@ -104,3 +104,4 @@
       ansible.builtin.debug:
         msg: "{{ jwt_file.stdout }}"
 
+

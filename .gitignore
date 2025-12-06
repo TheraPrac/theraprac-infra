@@ -73,3 +73,4 @@ id_ed25519
 # Terraform variables with secrets
 *.tfvars
 !*.tfvars.example
+.provision-basic-server-cache

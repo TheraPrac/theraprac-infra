@@ -64,16 +64,42 @@ output "ssh_command_eice" {
 }
 
 # -----------------------------------------------------------------------------
+# Ziti Configuration
+# -----------------------------------------------------------------------------
+
+output "ziti_controller_endpoint" {
+  description = "Ziti controller endpoint URL"
+  value       = module.basic_server.ziti_controller_endpoint
+}
+
+output "ziti_identity_name" {
+  description = "Ziti identity name for this server"
+  value       = module.basic_server.ziti_identity_name
+}
+
+# -----------------------------------------------------------------------------
 # For Ansible
 # -----------------------------------------------------------------------------
 
 output "ansible_vars" {
   description = "Variables to pass to Ansible playbook"
   value = {
-    server_name         = module.basic_server.full_name
-    server_internal_dns = module.basic_server.internal_dns
-    ziti_ssh_name       = module.basic_server.ziti_ssh
-    instance_id         = module.basic_server.instance_id
+    server_name              = module.basic_server.full_name
+    server_internal_dns      = module.basic_server.internal_dns
+    ziti_ssh_name            = module.basic_server.ziti_ssh
+    instance_id              = module.basic_server.instance_id
+    ziti_controller_endpoint = module.basic_server.ziti_controller_endpoint
+    ziti_identity_name       = module.basic_server.ziti_identity_name
   }
 }
+
+# -----------------------------------------------------------------------------
+# Security Group
+# -----------------------------------------------------------------------------
+
+output "shared_security_group_id" {
+  description = "Shared security group ID for basic servers"
+  value       = aws_security_group.basic_servers.id
+}
+
 

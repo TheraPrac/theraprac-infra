@@ -65,7 +65,7 @@ output "ziti_ssh" {
 
 output "security_group_id" {
   description = "Security group ID of the server"
-  value       = aws_security_group.server.id
+  value       = local.security_group_id
 }
 
 # -----------------------------------------------------------------------------
@@ -81,4 +81,19 @@ output "ssh_command_eice" {
   description = "SSH command via EC2 Instance Connect (break-glass)"
   value       = "aws ec2-instance-connect ssh --instance-id ${aws_instance.server.id} --os-user jfinlinson --connection-type eice"
 }
+
+# -----------------------------------------------------------------------------
+# Ziti Configuration
+# -----------------------------------------------------------------------------
+
+output "ziti_controller_endpoint" {
+  description = "Ziti controller endpoint URL"
+  value       = var.ziti_controller_endpoint
+}
+
+output "ziti_identity_name" {
+  description = "Ziti identity name for this server"
+  value       = "basic-server-${local.hyphen_name}"
+}
+
 

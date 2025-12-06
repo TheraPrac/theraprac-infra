@@ -6,6 +6,16 @@
 # =============================================================================
 
 ---
+- name: Read admin password from file
+  ansible.builtin.slurp:
+    src: /opt/ziti/controller/.admin_password
+  register: admin_pass_b64
+
+- name: Set password fact
+  ansible.builtin.set_fact:
+    ziti_admin_password: "{{ admin_pass_b64.content | b64decode | trim }}"
+  no_log: true
+
 - name: Ensure logged in to Ziti controller
   ansible.builtin.command:
     cmd: >
@@ -58,14 +68,49 @@
   changed_when: false
   failed_when: false
 
+- name: Check if ssh.ziti-nonprod service exists (alternative naming)
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list services 'name="ssh.ziti-nonprod"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: ssh_ziti_service_count
+  changed_when: false
+  failed_when: false
+
+- name: Get existing ssh service details
+  ansible.builtin.shell: |
+    {{ ziti_bin }} edge list services --output-json 2>/dev/null | jq -r '.data[] | select(.name == "ssh-nonprod" or .name == "ssh.ziti-nonprod") | {name, roleAttributes} | @json'
+  register: existing_ssh_service
+  changed_when: false
+  failed_when: false
+  when: (ssh_service_count.stdout | default('0') | int > 0) or (ssh_ziti_service_count.stdout | default('0') | int > 0)
+
+- name: Check if service needs role attribute update
+  ansible.builtin.set_fact:
+    ssh_service_name: "{{ (existing_ssh_service.stdout | from_json).name }}"
+    ssh_needs_role_update: "{{ 'ssh-services' not in ((existing_ssh_service.stdout | from_json).roleAttributes | default([])) }}"
+  when: 
+    - (ssh_service_count.stdout | default('0') | int > 0) or (ssh_ziti_service_count.stdout | default('0') | int > 0)
+    - existing_ssh_service.stdout != ""
+
 - name: Create ssh-nonprod service
   ansible.builtin.command:
     cmd: >
       {{ ziti_bin }} edge create service ssh-nonprod
       --configs ssh-nonprod.host,ssh-nonprod.intercept
       --role-attributes ssh-services
-  when: ssh_service_count.stdout | default('0') | int == 0
+  when: 
+    - ssh_service_count.stdout | default('0') | int == 0
+    - ssh_ziti_service_count.stdout | default('0') | int == 0
   register: ssh_service_created
+
+- name: Update existing service to add ssh-services role attribute
+  ansible.builtin.command:
+    cmd: >
+      {{ ziti_bin }} edge update service {{ ssh_service_name }}
+      --role-attributes ssh-services
+  when: 
+    - (ssh_service_count.stdout | default('0') | int > 0) or (ssh_ziti_service_count.stdout | default('0') | int > 0)
+    - ssh_needs_role_update | default(false) | bool
+  register: ssh_service_updated
 
 - name: Display service creation results
   ansible.builtin.debug:
@@ -73,5 +118,7 @@
       SSH Service Configuration:
       - Host config: {{ 'created' if ssh_host_config_created is changed else 'exists' }}
       - Intercept config: {{ 'created' if ssh_intercept_config_created is changed else 'exists' }}
-      - Service: {{ 'created' if ssh_service_created is changed else 'exists' }}
+      - Service: {{ 'created' if ssh_service_created is defined and ssh_service_created is changed else ('updated' if ssh_service_updated is defined and ssh_service_updated is changed else 'exists') }}
+      - Service name: {{ ssh_service_name | default('ssh-nonprod') }}
+
 
