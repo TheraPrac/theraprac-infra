@@ -1,0 +1,195 @@
+# =============================================================================
+# Ziti HTTPS Service Role - Main Tasks
+# =============================================================================
+# Registers HTTPS services with the Ziti controller for web app and API access.
+# Uses the existing enrolled identity on the server.
+#
+# Required variables:
+#   - app_domain: Web app domain (e.g., app-dev.theraprac.com)
+#   - api_domain: API domain (e.g., api-dev.theraprac.com)
+#   - ziti_identity_name: Existing identity name (e.g., basic-server-app-mt-dev)
+#   - ziti_controller_endpoint: Controller URL (e.g., https://ziti-dev.theraprac.com)
+# =============================================================================
+
+---
+# =============================================================================
+# Get Admin Credentials from AWS Secrets Manager
+# =============================================================================
+
+- name: Get admin password from AWS Secrets Manager
+  ansible.builtin.command:
+    cmd: >
+      aws secretsmanager get-secret-value
+      --secret-id ziti/nonprod/admin-password
+      --query 'SecretString'
+      --output text
+      --region {{ aws_region }}
+  register: sm_secret_result
+  no_log: true
+  changed_when: false
+
+- name: Set admin password fact
+  ansible.builtin.set_fact:
+    ziti_admin_password: "{{ sm_secret_result.stdout | trim }}"
+  no_log: true
+
+# =============================================================================
+# Login to Ziti Controller
+# =============================================================================
+
+- name: Login to Ziti controller
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge login
+      {{ ziti_controller_endpoint }}
+      --yes
+      --username admin
+      --password "{{ ziti_admin_password }}"
+  no_log: true
+  changed_when: true
+
+# =============================================================================
+# Create Web App Service
+# =============================================================================
+
+- name: Create web app HTTPS service
+  ansible.builtin.include_tasks: create_service.yml
+  vars:
+    service_name: "https.{{ app_domain }}"
+    intercept_address: "{{ app_domain }}"
+    backend_port: "{{ https_backend_port }}"
+    role_attributes: "{{ web_service_role_attributes }}"
+
+# =============================================================================
+# Create API Service
+# =============================================================================
+
+- name: Create API HTTPS service
+  ansible.builtin.include_tasks: create_service.yml
+  vars:
+    service_name: "https.{{ api_domain }}"
+    intercept_address: "{{ api_domain }}"
+    backend_port: "{{ https_backend_port }}"
+    role_attributes: "{{ api_service_role_attributes }}"
+
+# =============================================================================
+# Create Edge Router Policy (identity -> router access)
+# =============================================================================
+
+- name: Check if edge router policy exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list edge-router-policies 'name="basic-servers-erp"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: erp_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create edge router policy for basic-servers
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create edge-router-policy basic-servers-erp
+      --identity-roles "#basic-servers"
+      --edge-router-roles "#all"
+  when: erp_exists.stdout | default('0') | int == 0
+
+# =============================================================================
+# Create Service Edge Router Policy (service -> router access)
+# =============================================================================
+
+- name: Check if service edge router policy exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list service-edge-router-policies 'name="https-services-serp"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: serp_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create service edge router policy for HTTPS services
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service-edge-router-policy https-services-serp
+      --service-roles "#{{ web_service_role_attributes }},#{{ api_service_role_attributes }}"
+      --edge-router-roles "#all"
+  when: serp_exists.stdout | default('0') | int == 0
+
+# =============================================================================
+# Create Dial Policies (so users can access the services)
+# =============================================================================
+
+- name: Check if web dial policy exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list service-policies 'name="https-web-dial"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: web_dial_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create web services dial policy
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service-policy https-web-dial Dial
+      --identity-roles "{{ dial_identity_roles }}"
+      --service-roles "#{{ web_service_role_attributes }}"
+      --semantic AnyOf
+  when: web_dial_exists.stdout | default('0') | int == 0
+
+- name: Check if API dial policy exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list service-policies 'name="https-api-dial"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: api_dial_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create API services dial policy
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service-policy https-api-dial Dial
+      --identity-roles "{{ dial_identity_roles }}"
+      --service-roles "#{{ api_service_role_attributes }}"
+      --semantic AnyOf
+  when: api_dial_exists.stdout | default('0') | int == 0
+
+# =============================================================================
+# Restart Tunneler to Pick Up New Services
+# =============================================================================
+# The tunnel will auto-create terminators for services with host.v1 configs
+
+- name: Restart ziti-edge-tunnel to bind new services
+  ansible.builtin.systemd:
+    name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
+    state: restarted
+
+- name: Wait for tunnel to restart and bind services
+  ansible.builtin.pause:
+    seconds: 15
+
+- name: Check ziti-edge-tunnel service status
+  ansible.builtin.systemd:
+    name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
+  register: tunnel_service_status
+
+# =============================================================================
+# Summary
+# =============================================================================
+
+- name: Display HTTPS services summary
+  ansible.builtin.debug:
+    msg: |
+      Ziti HTTPS Services Registration Complete:
+      ==========================================
+      
+      Web App Service:
+        Name:      https.{{ app_domain }}
+        Intercept: {{ app_domain }}:443
+        Backend:   localhost:{{ https_backend_port }}
+        Role:      {{ web_service_role_attributes }}
+      
+      API Service:
+        Name:      https.{{ api_domain }}
+        Intercept: {{ api_domain }}:443
+        Backend:   localhost:{{ https_backend_port }}
+        Role:      {{ api_service_role_attributes }}
+      
+      Tunnel Status: {{ tunnel_service_status.status.ActiveState | default('unknown') }}
+      
+      Access via Ziti (requires ZDE or SDK):
+        https://{{ app_domain }} (Web App)
+        https://{{ api_domain }} (API)
+

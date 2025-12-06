@@ -187,6 +187,59 @@ resource "aws_iam_policy" "observability_write" {
 }
 
 # =============================================================================
+# Managed Policy: Route53 DNS-01 Challenge (for Certbot)
+# =============================================================================
+# Allows app servers to use certbot with Route53 DNS-01 challenge
+# for Let's Encrypt certificate management
+
+data "aws_route53_zone" "public" {
+  name         = "theraprac.com"
+  private_zone = false
+}
+
+data "aws_iam_policy_document" "route53_dns01" {
+  statement {
+    sid    = "Route53ChangeRecords"
+    effect = "Allow"
+    actions = [
+      "route53:ChangeResourceRecordSets"
+    ]
+    resources = [
+      "arn:aws:route53:::hostedzone/${data.aws_route53_zone.public.zone_id}"
+    ]
+  }
+
+  statement {
+    sid    = "Route53GetChange"
+    effect = "Allow"
+    actions = [
+      "route53:GetChange"
+    ]
+    resources = ["arn:aws:route53:::change/*"]
+  }
+
+  statement {
+    sid    = "Route53ListZones"
+    effect = "Allow"
+    actions = [
+      "route53:ListHostedZones",
+      "route53:ListHostedZonesByName"
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "route53_dns01" {
+  name        = "TheraPrac-Route53-DNS01"
+  description = "Route53 permissions for Certbot DNS-01 challenges"
+  policy      = data.aws_iam_policy_document.route53_dns01.json
+
+  tags = {
+    Name = "TheraPrac-Route53-DNS01"
+  }
+}
+
+# =============================================================================
 # IAM Role: Ziti Controller
 # =============================================================================
 # Policies: Base + Observability + Secrets (for bootstrap config)
@@ -287,6 +340,11 @@ resource "aws_iam_role_policy_attachment" "app_server_secrets" {
 resource "aws_iam_role_policy_attachment" "app_server_observability" {
   role       = aws_iam_role.app_server.name
   policy_arn = aws_iam_policy.observability_write.arn
+}
+
+resource "aws_iam_role_policy_attachment" "app_server_route53" {
+  role       = aws_iam_role.app_server.name
+  policy_arn = aws_iam_policy.route53_dns01.arn
 }
 
 resource "aws_iam_instance_profile" "app_server" {

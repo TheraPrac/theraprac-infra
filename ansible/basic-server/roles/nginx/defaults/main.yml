@@ -1,0 +1,29 @@
+# =============================================================================
+# Nginx Role - Default Variables
+# =============================================================================
+# Configures nginx as a reverse proxy with TLS termination
+# =============================================================================
+
+---
+# Nginx worker configuration
+nginx_worker_processes: auto
+nginx_worker_connections: 1024
+
+# Backend application ports
+app_backend_port: 3000    # Next.js
+api_backend_port: 8080    # Go API
+
+# SSL certificate paths (from Let's Encrypt via certbot)
+# Note: Uses app_domain as the primary domain for cert path
+ssl_certificate: "/etc/letsencrypt/live/{{ app_domain }}/fullchain.pem"
+ssl_certificate_key: "/etc/letsencrypt/live/{{ app_domain }}/privkey.pem"
+
+# SSL configuration
+ssl_protocols: "TLSv1.2 TLSv1.3"
+ssl_ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+
+# Proxy timeouts
+proxy_connect_timeout: 60s
+proxy_send_timeout: 60s
+proxy_read_timeout: 60s
+

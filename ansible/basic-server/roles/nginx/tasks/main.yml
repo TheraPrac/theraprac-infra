@@ -1,0 +1,78 @@
+# =============================================================================
+# Nginx Role - Main Tasks
+# =============================================================================
+# Installs and configures nginx as a reverse proxy with TLS termination.
+# Listens on 127.0.0.1:443 only - accessible via Ziti tunnel, not directly.
+#
+# Required variables:
+#   - app_domain: Web app domain (e.g., app-dev.theraprac.com)
+#   - api_domain: API domain (e.g., api-dev.theraprac.com)
+#   - app_backend_port: Next.js port (default: 3000)
+#   - api_backend_port: Go API port (default: 8080)
+# =============================================================================
+
+---
+# =============================================================================
+# Install Nginx
+# =============================================================================
+
+- name: Install nginx
+  ansible.builtin.dnf:
+    name: nginx
+    state: present
+
+# =============================================================================
+# Configure Nginx
+# =============================================================================
+
+- name: Create nginx conf.d directory
+  ansible.builtin.file:
+    path: /etc/nginx/conf.d
+    state: directory
+    mode: '0755'
+
+- name: Remove default nginx server block
+  ansible.builtin.file:
+    path: /etc/nginx/conf.d/default.conf
+    state: absent
+  notify: Reload nginx
+
+- name: Configure app server virtual hosts
+  ansible.builtin.template:
+    src: app-server.conf.j2
+    dest: /etc/nginx/conf.d/app-server.conf
+    mode: '0644'
+  notify: Reload nginx
+
+- name: Test nginx configuration
+  ansible.builtin.command:
+    cmd: nginx -t
+  changed_when: false
+
+# =============================================================================
+# Start Nginx
+# =============================================================================
+
+- name: Enable and start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+
+# =============================================================================
+# Summary
+# =============================================================================
+
+- name: Display nginx configuration
+  ansible.builtin.debug:
+    msg: |
+      Nginx Configuration:
+      ====================
+      Web App: {{ app_domain }} -> localhost:{{ app_backend_port }}
+      API:     {{ api_domain }} -> localhost:{{ api_backend_port }}
+      
+      Listening on: 127.0.0.1:443 (accessible only via Ziti)
+      
+      Config: /etc/nginx/conf.d/app-server.conf
+      Status: systemctl status nginx
+

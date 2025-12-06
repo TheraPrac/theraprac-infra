@@ -1,0 +1,185 @@
+# =============================================================================
+# TheraPrac Infrastructure - Add HTTPS Services to Existing Server
+# =============================================================================
+# Additive playbook that adds nginx, TLS certificates, and Ziti HTTPS services
+# to a server that already has ziti-edge-tunnel running.
+#
+# This playbook does NOT re-provision the server - it runs on an existing
+# basic server and adds HTTPS capabilities.
+#
+# Required variables:
+#   - target_env: dev, test, prod, or nonprod
+#   - ziti_identity_name: Existing identity name (e.g., basic-server-app-mt-dev)
+#   - ziti_controller_endpoint: Controller URL (e.g., https://ziti-dev.theraprac.com)
+#
+# Optional variables:
+#   - deploy_mock_backends: true/false - Deploy mock services for testing (default: false)
+#
+# Derived variables:
+#   - app_domain: app-{{ target_env }}.theraprac.com
+#   - api_domain: api-{{ target_env }}.theraprac.com
+#
+# Usage:
+#   # Via Ziti (preferred)
+#   ansible-playbook -i inventory/ziti.yml add-https.yml \
+#     --limit ssh.app.mt.dev.ziti \
+#     -e "target_env=dev" \
+#     -e "ziti_identity_name=basic-server-app-mt-dev" \
+#     -e "ziti_controller_endpoint=https://ziti-dev.theraprac.com"
+#
+#   # With mock backends for testing
+#   ansible-playbook -i inventory/ziti.yml add-https.yml \
+#     --limit ssh.app.mt.dev.ziti \
+#     -e "target_env=dev" \
+#     -e "ziti_identity_name=basic-server-app-mt-dev" \
+#     -e "ziti_controller_endpoint=https://ziti-dev.theraprac.com" \
+#     -e "deploy_mock_backends=true"
+#
+#   # Via EICE (if Ziti not available)
+#   ansible-playbook -i inventory/server-eice.yml add-https.yml \
+#     -e "target_env=dev" \
+#     -e "ziti_identity_name=basic-server-app-mt-dev" \
+#     -e "ziti_controller_endpoint=https://ziti-dev.theraprac.com"
+# =============================================================================
+
+---
+- name: Add HTTPS Services to Existing Server
+  hosts: all
+  become: true
+
+  vars:
+    # Derive domains from target_env
+    app_domain: "app-{{ target_env }}.theraprac.com"
+    api_domain: "api-{{ target_env }}.theraprac.com"
+    # Mock backends (default: disabled)
+    deploy_mock_backends: false
+
+  pre_tasks:
+    # =========================================================================
+    # Validate Required Variables
+    # =========================================================================
+
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - target_env is defined
+          - target_env in ['dev', 'test', 'prod', 'nonprod']
+          - ziti_identity_name is defined
+          - ziti_controller_endpoint is defined
+        fail_msg: |
+          Missing required variables. Usage:
+            -e "target_env=dev"
+            -e "ziti_identity_name=basic-server-app-mt-dev"
+            -e "ziti_controller_endpoint=https://ziti-dev.theraprac.com"
+
+    - name: Display configuration
+      ansible.builtin.debug:
+        msg: |
+          Add HTTPS Configuration:
+          =========================
+          Environment:  {{ target_env }}
+          App Domain:   {{ app_domain }}
+          API Domain:   {{ api_domain }}
+          Identity:     {{ ziti_identity_name }}
+          Controller:   {{ ziti_controller_endpoint }}
+
+    # =========================================================================
+    # Verify Ziti Tunnel is Running
+    # =========================================================================
+
+    - name: Check if ziti-edge-tunnel is running
+      ansible.builtin.systemd:
+        name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
+      register: tunnel_status
+      failed_when: tunnel_status.status.ActiveState != 'active'
+
+  roles:
+    # =========================================================================
+    # Role: mock-backends - Deploy Mock Services for Testing (Optional)
+    # =========================================================================
+    # Simple HTTP services on ports 3000 and 8080 for testing nginx + Ziti
+    # Enable with: -e "deploy_mock_backends=true"
+
+    - role: mock-backends
+      when: deploy_mock_backends | bool
+
+    # =========================================================================
+    # Role: certbot - Get Let's Encrypt Certificates
+    # =========================================================================
+    # Must run first so nginx has certificates to use
+
+    - role: certbot
+
+    # =========================================================================
+    # Role: nginx - Configure Reverse Proxy with TLS
+    # =========================================================================
+
+    - role: nginx
+
+    # =========================================================================
+    # Role: ziti-https-service - Register Services with Ziti
+    # =========================================================================
+
+    - role: ziti-https-service
+
+  post_tasks:
+    # =========================================================================
+    # Final Verification
+    # =========================================================================
+
+    - name: Verify nginx is running
+      ansible.builtin.systemd:
+        name: nginx
+      register: nginx_status
+      failed_when: nginx_status.status.ActiveState != 'active'
+
+    - name: Verify ziti-edge-tunnel is running
+      ansible.builtin.systemd:
+        name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
+      register: tunnel_final_status
+      failed_when: tunnel_final_status.status.ActiveState != 'active'
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          HTTPS Services Added Successfully!
+          ============================================================
+          
+          Environment: {{ target_env }}
+          Mock Backends: {{ 'ENABLED' if deploy_mock_backends | bool else 'disabled' }}
+          
+          Services Available via Ziti:
+          
+            Web App:
+              https://{{ app_domain }}
+              -> nginx (localhost:443)
+              -> {{ 'Mock Service' if deploy_mock_backends | bool else 'Next.js' }} (localhost:3000)
+            
+            API:
+              https://{{ api_domain }}
+              -> nginx (localhost:443)
+              -> {{ 'Mock Service' if deploy_mock_backends | bool else 'Go API' }} (localhost:8080)
+          
+          Certificates:
+            Path:    /etc/letsencrypt/live/{{ app_domain }}/
+            Renewal: systemctl status certbot-renew.timer
+          
+          Service Status:
+            nginx:            {{ nginx_status.status.ActiveState }}
+            ziti-edge-tunnel: {{ tunnel_final_status.status.ActiveState }}
+          {% if deploy_mock_backends | bool %}
+          
+          Mock Backend Commands:
+            Stop:    sudo systemctl stop mock-app mock-api
+            Disable: sudo systemctl disable mock-app mock-api
+          {% endif %}
+          
+          Note: Ensure dial policies exist for users to access these services.
+          See README.md for dial policy setup commands.
+          ============================================================
+

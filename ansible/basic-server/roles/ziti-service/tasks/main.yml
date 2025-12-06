@@ -76,14 +76,16 @@
   register: old_intercept_config_deleted
 
 # =============================================================================
-# Create Host Config (host.v2 with localhost terminator)
+# Create Host Config (host.v1 with localhost terminator)
 # =============================================================================
+# NOTE: Must use host.v1 format - ziti-edge-tunnel only auto-creates
+# terminators for services with host.v1 configs (not host.v2)
 
-- name: Create host.v2 config for SSH
+- name: Create host.v1 config for SSH
   ansible.builtin.command:
     cmd: >
-      /opt/ziti/bin/ziti edge create config {{ ziti_ssh_name }}.host host.v2
-      '{"terminators":[{"address":"localhost","port":22,"protocol":"tcp"}]}'
+      /opt/ziti/bin/ziti edge create config {{ ziti_ssh_name }}.host host.v1
+      '{"address":"127.0.0.1","port":22,"protocol":"tcp"}'
   register: host_config_created
 
 # =============================================================================
@@ -167,7 +169,7 @@
       SSH Address:    {{ ziti_ssh_name }}
       
       Components Created:
-      - Host config (host.v2): {{ ziti_ssh_name }}.host
+      - Host config (host.v1): {{ ziti_ssh_name }}.host
       - Intercept config:      {{ ziti_ssh_name }}.intercept
       - Service:               {{ ziti_ssh_name }} (role: ssh-services)
       - Bind policy:           {{ ziti_ssh_name }}-bind

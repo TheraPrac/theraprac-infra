@@ -1,0 +1,21 @@
+# =============================================================================
+# Ziti HTTPS Service Role - Default Variables
+# =============================================================================
+# Configures Ziti services for HTTPS access to web app and API
+# =============================================================================
+
+---
+# AWS region for Secrets Manager access
+aws_region: us-west-2
+
+# Role attributes for service categorization
+web_service_role_attributes: "web-services"
+api_service_role_attributes: "api-services"
+
+# Backend port (nginx listens on 443)
+https_backend_port: 443
+
+# Identity roles that can dial (access) these services
+# Use #users for broadest access (all enrolled users)
+dial_identity_roles: "#users"
+

@@ -1,0 +1,28 @@
+# =============================================================================
+# {{ mock_description }}
+# =============================================================================
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# =============================================================================
+
+[Unit]
+Description={{ mock_description }}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 {{ mock_script }}
+Restart=always
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{ mock_service_name }}
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,19 @@
+# =============================================================================
+# Mock Backends Role - Handlers
+# =============================================================================
+
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart mock-app
+  ansible.builtin.systemd:
+    name: mock-app
+    state: restarted
+
+- name: Restart mock-api
+  ansible.builtin.systemd:
+    name: mock-api
+    state: restarted
+

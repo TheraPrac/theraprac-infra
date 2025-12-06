@@ -1,0 +1,19 @@
+# =============================================================================
+# Certbot Renewal Timer
+# =============================================================================
+# Runs daily at 2 AM with random delay up to 1 hour
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# =============================================================================
+
+[Unit]
+Description=Certbot Renewal Timer
+Documentation=https://certbot.eff.org/docs/
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

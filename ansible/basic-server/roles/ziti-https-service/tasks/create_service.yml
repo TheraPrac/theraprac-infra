@@ -1,0 +1,108 @@
+# =============================================================================
+# Ziti HTTPS Service - Create Single Service
+# =============================================================================
+# Creates a single Ziti service with host.v1 and intercept.v1 configs
+# Called from main.yml via include_tasks
+#
+# IMPORTANT: Uses host.v1 (not host.v2) because ziti-edge-tunnel only
+# auto-creates terminators for services with host.v1 configs.
+#
+# Required variables (passed from caller):
+#   - service_name: Name of the service (e.g., app-dev.theraprac.com)
+#   - intercept_address: Address to intercept (e.g., app-dev.theraprac.com)
+#   - backend_port: Backend port (e.g., 443)
+#   - role_attributes: Service role attributes (e.g., web-services)
+#   - ziti_identity_name: Identity name for bind policy
+# =============================================================================
+
+---
+# =============================================================================
+# Check and Cleanup Existing Resources
+# =============================================================================
+
+- name: "Check if service exists: {{ service_name }}"
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list services 'name="{{ service_name }}"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: service_exists
+  changed_when: false
+  failed_when: false
+
+- name: "Delete existing service: {{ service_name }}"
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete service "{{ service_name }}"
+  when: service_exists.stdout | default('0') | int > 0
+
+- name: "Delete existing host config: {{ service_name }}.host"
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete config "{{ service_name }}.host"
+  failed_when: false
+
+- name: "Delete existing intercept config: {{ service_name }}.intercept"
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete config "{{ service_name }}.intercept"
+  failed_when: false
+
+- name: "Delete existing bind policy: {{ service_name }}-bind"
+  ansible.builtin.command:
+    cmd: /opt/ziti/bin/ziti edge delete service-policy "{{ service_name }}-bind"
+  failed_when: false
+
+# =============================================================================
+# Create Host Config (host.v1)
+# =============================================================================
+# Points to 127.0.0.1:443 where nginx is listening
+# NOTE: Must use host.v1 format - ziti-edge-tunnel doesn't auto-create
+# terminators for host.v2 configs
+
+- name: "Create host.v1 config: {{ service_name }}"
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create config {{ service_name }}.host host.v1
+      '{"address":"127.0.0.1","port":{{ backend_port }},"protocol":"tcp"}'
+  register: host_config_created
+
+# =============================================================================
+# Create Intercept Config (intercept.v1)
+# =============================================================================
+# What clients dial - the domain on port 443
+
+- name: "Create intercept.v1 config: {{ service_name }}"
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create config {{ service_name }}.intercept intercept.v1
+      '{"protocols":["tcp"],"addresses":["{{ intercept_address }}"],"portRanges":[{"low":443,"high":443}]}'
+  register: intercept_config_created
+
+# =============================================================================
+# Create Service
+# =============================================================================
+
+- name: "Create service: {{ service_name }}"
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service {{ service_name }}
+      --configs {{ service_name }}.host,{{ service_name }}.intercept
+      --role-attributes {{ role_attributes }}
+  register: service_created
+
+# =============================================================================
+# Create Bind Policy
+# =============================================================================
+# Allows the server identity to host (bind) this service
+
+- name: "Create bind policy: {{ service_name }}-bind"
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service-policy {{ service_name }}-bind Bind
+      --identity-roles "@{{ ziti_identity_name }}"
+      --service-roles "@{{ service_name }}"
+  register: bind_policy_created
+
+- name: "Display service creation status: {{ service_name }}"
+  ansible.builtin.debug:
+    msg: |
+      Service created: {{ service_name }}
+        Host config:      {{ service_name }}.host
+        Intercept config: {{ service_name }}.intercept
+        Bind policy:      {{ service_name }}-bind
+

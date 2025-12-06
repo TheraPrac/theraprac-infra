@@ -1,0 +1,15 @@
+# =============================================================================
+# Mock Backends Role - Default Variables
+# =============================================================================
+# Simple HTTP services for testing nginx and Ziti before deploying real apps
+# =============================================================================
+
+---
+# Ports for mock services
+mock_app_port: 3000
+mock_api_port: 8080
+
+# Service names
+mock_app_service_name: mock-app
+mock_api_service_name: mock-api
+

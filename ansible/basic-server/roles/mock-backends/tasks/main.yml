@@ -1,0 +1,141 @@
+# =============================================================================
+# Mock Backends Role - Main Tasks
+# =============================================================================
+# Sets up simple HTTP services on ports 3000 and 8080 for testing.
+# These mock services respond to health checks and show status messages.
+# =============================================================================
+
+---
+# =============================================================================
+# Create Mock Service Directory
+# =============================================================================
+
+- name: Create mock services directory
+  ansible.builtin.file:
+    path: /opt/mock-services
+    state: directory
+    mode: '0755'
+
+# =============================================================================
+# Deploy Mock App Service (Port 3000 - simulates Next.js)
+# =============================================================================
+
+- name: Deploy mock app server script
+  ansible.builtin.template:
+    src: mock-server.py.j2
+    dest: /opt/mock-services/mock-app.py
+    mode: '0755'
+  vars:
+    mock_port: "{{ mock_app_port }}"
+    mock_name: "TheraPrac Web App (Mock)"
+    mock_service_type: "web"
+  notify: Restart mock-app
+
+- name: Deploy mock app systemd service
+  ansible.builtin.template:
+    src: mock-service.service.j2
+    dest: /etc/systemd/system/mock-app.service
+    mode: '0644'
+  vars:
+    mock_service_name: "{{ mock_app_service_name }}"
+    mock_script: /opt/mock-services/mock-app.py
+    mock_description: "Mock Web App Service (Next.js placeholder)"
+  notify:
+    - Reload systemd
+    - Restart mock-app
+
+# =============================================================================
+# Deploy Mock API Service (Port 8080 - simulates Go API)
+# =============================================================================
+
+- name: Deploy mock API server script
+  ansible.builtin.template:
+    src: mock-server.py.j2
+    dest: /opt/mock-services/mock-api.py
+    mode: '0755'
+  vars:
+    mock_port: "{{ mock_api_port }}"
+    mock_name: "TheraPrac API (Mock)"
+    mock_service_type: "api"
+  notify: Restart mock-api
+
+- name: Deploy mock API systemd service
+  ansible.builtin.template:
+    src: mock-service.service.j2
+    dest: /etc/systemd/system/mock-api.service
+    mode: '0644'
+  vars:
+    mock_service_name: "{{ mock_api_service_name }}"
+    mock_script: /opt/mock-services/mock-api.py
+    mock_description: "Mock API Service (Go API placeholder)"
+  notify:
+    - Reload systemd
+    - Restart mock-api
+
+# =============================================================================
+# Start Services
+# =============================================================================
+
+- name: Enable and start mock-app service
+  ansible.builtin.systemd:
+    name: mock-app
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Enable and start mock-api service
+  ansible.builtin.systemd:
+    name: mock-api
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# =============================================================================
+# Verify Services
+# =============================================================================
+
+- name: Wait for services to start
+  ansible.builtin.pause:
+    seconds: 2
+
+- name: Test mock-app health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ mock_app_port }}/health"
+    return_content: true
+  register: app_health
+  failed_when: app_health.status != 200
+
+- name: Test mock-api health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ mock_api_port }}/health"
+    return_content: true
+  register: api_health
+  failed_when: api_health.status != 200
+
+# =============================================================================
+# Summary
+# =============================================================================
+
+- name: Display mock services status
+  ansible.builtin.debug:
+    msg: |
+      Mock Backend Services Running:
+      ==============================
+      
+      Web App (Next.js placeholder):
+        Port:   {{ mock_app_port }}
+        Health: http://127.0.0.1:{{ mock_app_port }}/health
+        Status: {{ app_health.json.status }}
+      
+      API (Go API placeholder):
+        Port:   {{ mock_api_port }}
+        Health: http://127.0.0.1:{{ mock_api_port }}/health
+        Status: {{ api_health.json.status }}
+      
+      These services will respond to requests through nginx.
+      Replace with real applications when ready.
+      
+      To stop mock services:
+        sudo systemctl stop mock-app mock-api
+        sudo systemctl disable mock-app mock-api
+
