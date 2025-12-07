@@ -8,6 +8,7 @@ Ansible playbooks for provisioning and configuring TheraPrac servers with Ziti o
 |----------|---------|
 | `playbook.yml` | Provision basic server with Ziti SSH access |
 | `add-https.yml` | Add HTTPS services to existing server |
+| `cleanup-ziti.yml` | **Clean up Ziti resources before destroying server** |
 
 ## Roles
 
@@ -21,6 +22,50 @@ Ansible playbooks for provisioning and configuring TheraPrac servers with Ziti o
 | `nginx` | Configure nginx reverse proxy with TLS |
 | `ziti-https-service` | Register HTTPS services with Ziti |
 | `mock-backends` | Simple HTTP services for testing (optional) |
+
+---
+
+## ⚠️ IMPORTANT: Cleanup Before Terraform Destroy
+
+**You MUST clean up Ziti resources before destroying a server with Terraform!**
+
+When you destroy a basic server with Terraform, the EC2 instance is terminated, but the Ziti resources (identities, services, configs, policies) remain in the Ziti controller. This creates orphaned resources that can cause issues.
+
+**Note:** The cleanup connects directly to the Ziti controller API - the server does NOT need to be running or accessible. You can even run cleanup after the server is terminated to clean up orphaned resources.
+
+### Quick Cleanup
+
+```bash
+# Use the wrapper script (recommended)
+./scripts/cleanup-basic-server-ziti.sh <name> <role> <environment>
+./scripts/cleanup-basic-server-ziti.sh app mt nonprod
+
+# Or run the playbook directly
+ansible-playbook -i inventory/server-eice.yml cleanup-ziti.yml \
+  -e "server_name=app.mt.nonprod" \
+  -e "ziti_ssh_name=ssh.app.mt.nonprod.ziti" \
+  -e "ziti_identity_name=basic-server-app-mt-nonprod" \
+  -e "ziti_controller_endpoint=https://ziti-nonprod.theraprac.com"
+```
+
+### What Gets Cleaned Up
+
+- Ziti identity (e.g., `basic-server-app-mt-nonprod`)
+- SSH service (e.g., `ssh.app.mt.nonprod.ziti`)
+- SSH configs (host.v1 and intercept.v1)
+- SSH bind policy
+- HTTPS services (if they were added)
+- HTTPS configs and policies (if they were added)
+
+### Audit Current Resources
+
+To see what Ziti resources currently exist:
+
+```bash
+./scripts/list-ziti-resources.sh
+```
+
+This will show all identities, services, configs, and policies in your Ziti controller.
 
 ---
 

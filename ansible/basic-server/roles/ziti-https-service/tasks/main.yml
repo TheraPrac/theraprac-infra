@@ -1,5 +1,5 @@
 # =============================================================================
-# Ziti HTTPS Service Role - Main Tasks
+# Ziti HTTPS Service Role - Main Tasks (Idempotent)
 # =============================================================================
 # Registers HTTPS services with the Ziti controller for web app and API access.
 # Uses the existing enrolled identity on the server.
@@ -12,6 +12,14 @@
 # =============================================================================
 
 ---
+# =============================================================================
+# Initialize Change Tracking
+# =============================================================================
+
+- name: Initialize service changed fact
+  ansible.builtin.set_fact:
+    ziti_service_changed: false
+
 # =============================================================================
 # Get Admin Credentials from AWS Secrets Manager
 # =============================================================================
@@ -46,10 +54,10 @@
       --username admin
       --password "{{ ziti_admin_password }}"
   no_log: true
-  changed_when: true
+  changed_when: false  # Login is not a state change
 
 # =============================================================================
-# Create Web App Service
+# Create Web App Service (Idempotent)
 # =============================================================================
 
 - name: Create web app HTTPS service
@@ -61,7 +69,7 @@
     role_attributes: "{{ web_service_role_attributes }}"
 
 # =============================================================================
-# Create API Service
+# Create API Service (Idempotent)
 # =============================================================================
 
 - name: Create API HTTPS service
@@ -90,6 +98,7 @@
       --identity-roles "#basic-servers"
       --edge-router-roles "#all"
   when: erp_exists.stdout | default('0') | int == 0
+  register: erp_created
 
 # =============================================================================
 # Create Service Edge Router Policy (service -> router access)
@@ -109,6 +118,7 @@
       --service-roles "#{{ web_service_role_attributes }},#{{ api_service_role_attributes }}"
       --edge-router-roles "#all"
   when: serp_exists.stdout | default('0') | int == 0
+  register: serp_created
 
 # =============================================================================
 # Create Dial Policies (so users can access the services)
@@ -129,6 +139,7 @@
       --service-roles "#{{ web_service_role_attributes }}"
       --semantic AnyOf
   when: web_dial_exists.stdout | default('0') | int == 0
+  register: web_dial_created
 
 - name: Check if API dial policy exists
   ansible.builtin.shell: |
@@ -145,20 +156,30 @@
       --service-roles "#{{ api_service_role_attributes }}"
       --semantic AnyOf
   when: api_dial_exists.stdout | default('0') | int == 0
+  register: api_dial_created
 
 # =============================================================================
-# Restart Tunneler to Pick Up New Services
+# Restart Tunneler Only If Services Changed
 # =============================================================================
 # The tunnel will auto-create terminators for services with host.v1 configs
+
+- name: Determine if tunnel restart is needed
+  ansible.builtin.set_fact:
+    tunnel_restart_needed: >-
+      {{ ziti_service_changed or
+         (erp_created is changed) or
+         (serp_created is changed) }}
 
 - name: Restart ziti-edge-tunnel to bind new services
   ansible.builtin.systemd:
     name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
     state: restarted
+  when: tunnel_restart_needed
 
 - name: Wait for tunnel to restart and bind services
   ansible.builtin.pause:
     seconds: 15
+  when: tunnel_restart_needed
 
 - name: Check ziti-edge-tunnel service status
   ansible.builtin.systemd:
@@ -172,8 +193,8 @@
 - name: Display HTTPS services summary
   ansible.builtin.debug:
     msg: |
-      Ziti HTTPS Services Registration Complete:
-      ==========================================
+      Ziti HTTPS Services Configuration:
+      ===================================
       
       Web App Service:
         Name:      https.{{ app_domain }}
@@ -187,9 +208,9 @@
         Backend:   localhost:{{ https_backend_port }}
         Role:      {{ api_service_role_attributes }}
       
+      Changes Made: {{ 'Yes - tunnel restarted' if tunnel_restart_needed else 'No - all resources already exist' }}
       Tunnel Status: {{ tunnel_service_status.status.ActiveState | default('unknown') }}
       
       Access via Ziti (requires ZDE or SDK):
         https://{{ app_domain }} (Web App)
         https://{{ api_domain }} (API)
-

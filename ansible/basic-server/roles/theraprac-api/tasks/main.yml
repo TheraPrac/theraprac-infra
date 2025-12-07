@@ -1,0 +1,182 @@
+---
+# =============================================================================
+# TheraPrac API Role Tasks
+# =============================================================================
+
+- name: Validate required variables
+  assert:
+    that:
+      - target_env is defined
+      - target_env in ['dev', 'test', 'prod']
+      - aws_account_id is defined
+      - s3_bucket is defined
+      - version is defined
+    fail_msg: |
+      Required variables:
+        - target_env: {{ target_env | default('NOT SET') }} (must be dev, test, or prod)
+        - aws_account_id: {{ aws_account_id | default('NOT SET') }}
+        - s3_bucket: {{ s3_bucket | default('NOT SET') }}
+        - version: {{ version | default('NOT SET') }}
+
+# =============================================================================
+# User and Directory Setup
+# =============================================================================
+
+- name: Create theraprac system group
+  group:
+    name: "{{ theraprac_group }}"
+    system: yes
+    state: present
+
+- name: Create theraprac system user
+  user:
+    name: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    system: yes
+    shell: /sbin/nologin
+    home: "{{ theraprac_home }}"
+    create_home: no
+    comment: "TheraPrac API Service Account"
+
+- name: Create application directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0755'
+  loop:
+    - "{{ theraprac_home }}"
+    - "{{ theraprac_bin_dir }}"
+    - "{{ theraprac_etc_dir }}"
+    - "{{ theraprac_data_dir }}"
+
+- name: Create log directory
+  file:
+    path: "{{ theraprac_log_dir }}"
+    state: directory
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0755'
+
+# =============================================================================
+# Binary Deployment
+# =============================================================================
+
+- name: Set artifact paths
+  set_fact:
+    s3_artifact_path: "builds/main/latest/theraprac-api-linux-arm64"
+    s3_checksum_path: "builds/main/latest/theraprac-api-linux-arm64.sha256"
+  when: version == 'latest'
+
+- name: Set artifact paths for specific version
+  set_fact:
+    s3_artifact_path: "releases/v{{ version }}/theraprac-api-linux-arm64"
+    s3_checksum_path: "releases/v{{ version }}/theraprac-api-linux-arm64.sha256"
+  when: version != 'latest'
+
+- name: Download binary checksum from S3
+  amazon.aws.aws_s3:
+    bucket: "{{ s3_bucket }}"
+    object: "{{ s3_checksum_path }}"
+    dest: "/tmp/theraprac-api.sha256"
+    mode: get
+  register: checksum_download
+
+- name: Read checksum
+  slurp:
+    src: "/tmp/theraprac-api.sha256"
+  register: checksum_file
+
+- name: Set expected checksum
+  set_fact:
+    expected_checksum: "{{ (checksum_file.content | b64decode).split()[0] }}"
+
+- name: Download binary from S3
+  amazon.aws.aws_s3:
+    bucket: "{{ s3_bucket }}"
+    object: "{{ s3_artifact_path }}"
+    dest: "{{ theraprac_bin_dir }}/{{ binary_name }}"
+    mode: get
+  register: binary_download
+  notify: restart theraprac-api
+
+- name: Verify binary checksum
+  stat:
+    path: "{{ theraprac_bin_dir }}/{{ binary_name }}"
+    checksum_algorithm: sha256
+  register: binary_stat
+  failed_when: binary_stat.stat.checksum != expected_checksum
+
+- name: Set binary permissions
+  file:
+    path: "{{ theraprac_bin_dir }}/{{ binary_name }}"
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0755'
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+- name: Create environment file
+  template:
+    src: theraprac-api.env.j2
+    dest: "{{ theraprac_etc_dir }}/theraprac-api.env"
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: "{{ env_file_mode }}"
+  notify: restart theraprac-api
+
+# =============================================================================
+# Systemd Service
+# =============================================================================
+
+- name: Copy systemd service file
+  copy:
+    src: "{{ playbook_dir }}/../../theraprac-api/deploy/systemd/theraprac-api.service"
+    dest: /etc/systemd/system/theraprac-api.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart theraprac-api
+
+- name: Ensure systemd is reloaded if needed
+  meta: flush_handlers
+
+- name: Enable and start service
+  systemd:
+    name: "{{ service_name }}"
+    enabled: yes
+    state: started
+  when: not ansible_check_mode
+
+# =============================================================================
+# Health Check
+# =============================================================================
+
+- name: Wait for service to be healthy
+  uri:
+    url: "http://localhost:8080/healthz"
+    method: GET
+    status_code: 200
+  register: health_check
+  retries: 30
+  delay: 2
+  until: health_check.status == 200
+  when: not ansible_check_mode
+
+- name: Display deployment summary
+  debug:
+    msg: |
+      TheraPrac API Deployment Complete
+      =====================================
+      Environment: {{ target_env }}
+      Version: {{ version }}
+      Binary: {{ theraprac_bin_dir }}/{{ binary_name }}
+      Config: {{ theraprac_etc_dir }}/theraprac-api.env
+      Service: {{ service_name }}
+      Status: {{ 'Running' if not ansible_check_mode else 'Check mode - not started' }}
+

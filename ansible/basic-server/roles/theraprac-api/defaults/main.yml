@@ -1,0 +1,34 @@
+---
+# =============================================================================
+# TheraPrac API Role Defaults
+# =============================================================================
+
+# User and group
+theraprac_user: theraprac
+theraprac_group: theraprac
+
+# Directory structure
+theraprac_home: /opt/theraprac
+theraprac_bin_dir: "{{ theraprac_home }}/bin"
+theraprac_etc_dir: "{{ theraprac_home }}/etc"
+theraprac_log_dir: /var/log/theraprac
+theraprac_data_dir: "{{ theraprac_home }}/data"
+
+# AWS Configuration
+aws_region: us-west-2
+
+# S3 bucket for artifacts (override in playbook or inventory)
+# s3_bucket: ""
+
+# Application version (override in playbook)
+# version: ""
+
+# Systemd service name
+service_name: theraprac-api
+
+# Binary name
+binary_name: theraprac-api
+
+# Environment file permissions
+env_file_mode: "0600"
+

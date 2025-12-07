@@ -1,0 +1,355 @@
+#!/bin/bash
+# =============================================================================
+# TheraPrac Infrastructure - Deploy API
+# =============================================================================
+# Deploys the TheraPrac API to a server with AWS configuration.
+#
+# This script:
+#   1. Validates AWS credentials
+#   2. Checks/applies Terraform IAM (KMS + SSM permissions)
+#   3. Validates AWS resources exist (KMS, Secrets Manager, SSM)
+#   4. Runs Ansible deploy-api.yml playbook
+#   5. Verifies deployment health
+#
+# Prerequisites:
+#   - Server already provisioned via provision-basic-server.sh
+#   - HTTPS configured via add-https-to-server.sh
+#   - AWS resources created via setup-aws-config.sh (or run with --bootstrap)
+#   - API binary built and uploaded to S3
+#
+# Usage:
+#   ./scripts/deploy-api.sh                    # Interactive mode
+#   ./scripts/deploy-api.sh -y                 # Non-interactive (use cached)
+#   ./scripts/deploy-api.sh --non-interactive
+#   ./scripts/deploy-api.sh --bootstrap        # Create missing AWS resources
+# =============================================================================
+
+set -e
+
+# Script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+API_REPO_ROOT="$(cd "$REPO_ROOT/../theraprac-api" && pwd)"
+
+# Source common functions
+source "$SCRIPT_DIR/lib/common.sh"
+
+# Configuration
+TF_IAM_DIR="$REPO_ROOT/infra/phase3-iam"
+ANSIBLE_DIR="$REPO_ROOT/ansible/basic-server"
+CACHE_FILE="$REPO_ROOT/.deploy-api-cache"
+SETUP_SCRIPT="$API_REPO_ROOT/scripts/setup-aws-config.sh"
+
+# =============================================================================
+# Parse Arguments
+# =============================================================================
+
+NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
+BOOTSTRAP_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --non-interactive|-y)
+            NON_INTERACTIVE=true
+            shift
+            ;;
+        --bootstrap)
+            BOOTSTRAP_MODE=true
+            shift
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            echo "Usage: $0 [--non-interactive|-y] [--bootstrap]"
+            exit 1
+            ;;
+    esac
+done
+
+# =============================================================================
+# Main Script
+# =============================================================================
+
+print_banner "TheraPrac - Deploy API"
+echo ""
+
+# Ensure AWS credentials are valid
+if ! ensure_aws_credentials; then
+    exit 1
+fi
+
+# Get AWS account ID
+AWS_ACCOUNT_ID=$(get_aws_account_id)
+echo -e "AWS Account: ${GREEN}${AWS_ACCOUNT_ID}${NC}"
+
+echo ""
+print_header "Deployment Configuration"
+
+# Try to load cached values
+if load_cache "$CACHE_FILE" && [ -n "$CACHED_TARGET_ENV" ]; then
+    echo -e "${GREEN}Found cached values from last run:${NC}"
+    echo "  Environment:  $CACHED_TARGET_ENV"
+    echo "  Version:      $CACHED_VERSION"
+    echo "  Server Name:  $CACHED_SERVER_NAME"
+    echo "  S3 Bucket:    $CACHED_S3_BUCKET"
+    echo ""
+    
+    if [ "$NON_INTERACTIVE" = "true" ]; then
+        REPLY="Y"
+        echo -e "${BLUE}Use cached values? [Y/n]: Y (non-interactive)${NC}"
+    else
+        read -p "Use cached values? [Y/n] " -n 1 -r
+        echo
+    fi
+    
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        TARGET_ENV="$CACHED_TARGET_ENV"
+        VERSION="$CACHED_VERSION"
+        SERVER_NAME="$CACHED_SERVER_NAME"
+        S3_BUCKET="$CACHED_S3_BUCKET"
+        echo -e "${GREEN}Using cached values${NC}"
+    else
+        # Clear cache and prompt for new values
+        rm -f "$CACHE_FILE"
+        CACHED_TARGET_ENV=""
+    fi
+fi
+
+# Prompt for values if not loaded from cache
+if [ -z "$TARGET_ENV" ]; then
+    prompt_choice TARGET_ENV "Target environment" "dev, test, prod" "dev"
+    prompt VERSION "API version to deploy" "latest"
+    prompt SERVER_NAME "Server name (e.g., app.mt, theraprac.mt)" ""
+    prompt S3_BUCKET "S3 artifact bucket" "theraprac-artifacts"
+fi
+
+# Derive values
+SERVER_HOST="ssh.${SERVER_NAME}.${TARGET_ENV}.ziti"
+# Convert dots to dashes for Ansible inventory host name: app.mt -> app-mt
+SERVER_NAME_DASHED="${SERVER_NAME//./-}"
+ANSIBLE_HOST="${SERVER_NAME_DASHED}-${TARGET_ENV}"
+API_DOMAIN="api-${TARGET_ENV}.theraprac.com"
+
+echo ""
+print_header "Configuration Summary"
+echo -e "  Environment:   ${GREEN}${TARGET_ENV}${NC}"
+echo -e "  Version:       ${GREEN}${VERSION}${NC}"
+echo -e "  Server Name:   ${SERVER_NAME}"
+echo -e "  Server Host:   ${GREEN}${SERVER_HOST}${NC}"
+echo -e "  S3 Bucket:     ${S3_BUCKET}"
+echo -e "  AWS Account:   ${AWS_ACCOUNT_ID}"
+echo ""
+echo -e "  API Domain:    ${GREEN}${API_DOMAIN}${NC}"
+echo ""
+
+if ! confirm "Continue with this configuration?"; then
+    echo "Aborted."
+    exit 0
+fi
+
+# Save to cache
+save_cache "$CACHE_FILE" TARGET_ENV VERSION SERVER_NAME S3_BUCKET
+
+# =============================================================================
+# Step 1: Check Terraform IAM
+# =============================================================================
+
+print_header "Step 1: Checking Terraform IAM (KMS + SSM permissions)"
+
+cd "$TF_IAM_DIR"
+
+# Refresh credentials before Terraform
+refresh_aws_credentials || true
+
+# Initialize Terraform
+if [ ! -d ".terraform" ]; then
+    echo -e "${YELLOW}Initializing Terraform...${NC}"
+    terraform init -reconfigure
+fi
+
+# Check for changes
+echo -e "${YELLOW}Checking for pending Terraform changes...${NC}"
+set +e
+terraform plan -detailed-exitcode >/dev/null 2>&1
+TF_EXIT_CODE=$?
+set -e
+
+case $TF_EXIT_CODE in
+    0)
+        echo -e "${GREEN}✓ Terraform IAM is up to date${NC}"
+        ;;
+    2)
+        echo -e "${YELLOW}Terraform IAM has pending changes${NC}"
+        echo ""
+        terraform plan
+        echo ""
+        if confirm "Apply these Terraform changes?"; then
+            echo -e "${YELLOW}Applying Terraform changes...${NC}"
+            terraform apply -auto-approve
+            echo -e "${GREEN}✓ Terraform apply complete${NC}"
+        else
+            echo -e "${YELLOW}Skipping Terraform apply. Continuing...${NC}"
+        fi
+        ;;
+    *)
+        echo -e "${RED}Error checking Terraform state${NC}"
+        echo "You may need to run: cd $TF_IAM_DIR && terraform init"
+        exit 1
+        ;;
+esac
+
+cd "$REPO_ROOT"
+
+# =============================================================================
+# Step 2: Validate AWS Resources
+# =============================================================================
+
+print_header "Step 2: Validating AWS Resources"
+
+# Check if setup script exists
+if [ ! -f "$SETUP_SCRIPT" ]; then
+    echo -e "${RED}Error: Setup script not found: $SETUP_SCRIPT${NC}"
+    echo "Please ensure theraprac-api repository is at: $API_REPO_ROOT"
+    exit 1
+fi
+
+# Run validation
+echo -e "${YELLOW}Checking AWS resources for environment: ${TARGET_ENV}${NC}"
+echo ""
+
+set +e
+"$SETUP_SCRIPT" --environment "$TARGET_ENV" --validate-only
+VALIDATE_EXIT=$?
+set -e
+
+if [ $VALIDATE_EXIT -eq 0 ]; then
+    echo -e "${GREEN}✓ All AWS resources exist${NC}"
+else
+    echo ""
+    echo -e "${YELLOW}Some AWS resources are missing${NC}"
+    
+    if [ "$BOOTSTRAP_MODE" = "true" ]; then
+        echo -e "${BLUE}Bootstrap mode: Creating missing resources...${NC}"
+        if [ "$NON_INTERACTIVE" = "true" ]; then
+            "$SETUP_SCRIPT" --environment "$TARGET_ENV" --non-interactive
+        else
+            "$SETUP_SCRIPT" --environment "$TARGET_ENV"
+        fi
+    else
+        echo ""
+        echo "Options:"
+        echo "  1. Run this script with --bootstrap to create resources"
+        echo "  2. Run setup manually: $SETUP_SCRIPT --environment $TARGET_ENV"
+        echo ""
+        
+        if confirm "Create missing AWS resources now?"; then
+            if [ "$NON_INTERACTIVE" = "true" ]; then
+                "$SETUP_SCRIPT" --environment "$TARGET_ENV" --non-interactive
+            else
+                "$SETUP_SCRIPT" --environment "$TARGET_ENV"
+            fi
+        else
+            echo -e "${RED}Cannot proceed without required AWS resources${NC}"
+            exit 1
+        fi
+    fi
+fi
+
+# =============================================================================
+# Step 3: Run Ansible Playbook
+# =============================================================================
+
+print_header "Step 3: Running Ansible Playbook"
+
+cd "$ANSIBLE_DIR"
+
+# Remove old host key from known_hosts (server may have been recreated)
+echo -e "${YELLOW}Cleaning up old SSH host keys for ${SERVER_HOST}...${NC}"
+ssh-keygen -R "${SERVER_HOST}" 2>/dev/null || true
+ssh-keygen -R "${ANSIBLE_HOST}" 2>/dev/null || true
+echo -e "${GREEN}✓ Host keys cleaned up${NC}"
+
+# Check Ziti connectivity (warning only, not fatal)
+echo -e "${YELLOW}Checking Ziti connectivity to ${SERVER_HOST}...${NC}"
+if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "ansible@${SERVER_HOST}" exit 0 2>/dev/null; then
+    echo -e "${GREEN}✓ Ziti connection available${NC}"
+else
+    echo -e "${YELLOW}Warning: Cannot connect to server via Ziti${NC}"
+    echo ""
+    echo "This may be because:"
+    echo "  1. Ziti Desktop Edge (ZDE) is not running locally"
+    echo "  2. Your identity doesn't have access to: ${SERVER_HOST}"
+    echo "  3. The server's ziti-edge-tunnel is not running"
+    echo ""
+    echo -e "${YELLOW}Attempting Ansible deployment anyway...${NC}"
+    echo -e "${YELLOW}If it fails, ensure ZDE is running or use EICE for break-glass access.${NC}"
+    echo ""
+fi
+
+echo ""
+echo -e "${YELLOW}Running deploy-api.yml playbook...${NC}"
+echo ""
+
+ansible-playbook -i inventory/ziti.yml deploy-api.yml \
+    --limit "${ANSIBLE_HOST}" \
+    -e "target_env=${TARGET_ENV}" \
+    -e "version=${VERSION}" \
+    -e "s3_bucket=${S3_BUCKET}" \
+    -e "aws_account_id=${AWS_ACCOUNT_ID}"
+
+cd "$REPO_ROOT"
+
+# =============================================================================
+# Step 4: Health Check
+# =============================================================================
+
+print_header "Step 4: Verifying Deployment"
+
+echo -e "${YELLOW}Waiting for API to be healthy...${NC}"
+
+# Give the service a moment to start
+sleep 5
+
+# Try health check via Ziti (if available)
+HEALTH_OK=false
+for i in {1..30}; do
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
+        "curl -sf http://localhost:8080/healthz" >/dev/null 2>&1; then
+        HEALTH_OK=true
+        break
+    fi
+    echo -n "."
+    sleep 2
+done
+echo ""
+
+if [ "$HEALTH_OK" = "true" ]; then
+    echo -e "${GREEN}✓ API health check passed${NC}"
+else
+    echo -e "${YELLOW}Warning: Health check did not complete${NC}"
+    echo "Check logs: ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-api -n 50'"
+fi
+
+# =============================================================================
+# Done
+# =============================================================================
+
+echo ""
+print_success_banner "API Deployment Complete!"
+echo ""
+echo -e "  Environment: ${TARGET_ENV}"
+echo -e "  Version:     ${VERSION}"
+echo -e "  Server:      ${SERVER_HOST}"
+echo ""
+echo -e "  ${BLUE}API available at:${NC}"
+echo -e "    https://${API_DOMAIN}"
+echo ""
+echo -e "  ${BLUE}Health check:${NC}"
+echo -e "    curl https://${API_DOMAIN}/healthz"
+echo ""
+echo -e "  ${BLUE}View logs:${NC}"
+echo -e "    ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-api -f'"
+echo ""
+echo -e "  ${BLUE}Service status:${NC}"
+echo -e "    ssh ansible@${SERVER_HOST} 'systemctl status theraprac-api'"
+echo ""
+

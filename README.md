@@ -59,6 +59,11 @@ ansible-playbook -i inventory/aws_ssm.yml playbook.yml
 | `scripts/aws-auth.sh` | Authenticate via AWS SSO and export credentials |
 | `scripts/tf-plan.sh` | Run terraform plan with output file |
 | `scripts/tf-apply.sh` | Apply a terraform plan file |
+| `scripts/list-ziti-resources.sh` | List all Ziti identities, services, and policies |
+| `scripts/audit-ziti-resources.sh` | **Comprehensive audit of Ziti resources for orphaned items** |
+| `scripts/cleanup-orphaned-ziti-resources.sh` | **Interactive cleanup of orphaned Ziti resources** |
+| `scripts/cleanup-basic-server-ziti.sh` | **Clean up Ziti resources before destroying server** |
+| `scripts/provision-basic-server.sh` | Provision a new basic server with Ziti |
 
 ### Usage Examples
 
@@ -71,6 +76,22 @@ scripts/tf-plan.sh phase4-ziti
 
 # Apply the plan
 scripts/tf-apply.sh phase4-ziti
+
+# List Ziti resources (quick overview)
+scripts/list-ziti-resources.sh
+
+# Comprehensive audit for orphaned resources
+scripts/audit-ziti-resources.sh nonprod
+
+# Clean up orphaned resources (interactive)
+scripts/cleanup-orphaned-ziti-resources.sh nonprod
+
+# Clean up Ziti before destroying a server
+scripts/cleanup-basic-server-ziti.sh app mt nonprod
+
+# Then destroy with Terraform
+cd infra/phase7-basic-server
+terraform destroy -var="name=app" -var="role=mt" -var="tier=app" -var="environment=nonprod"
 ```
 
 ## State Management
@@ -114,4 +135,18 @@ curl -I https://ziti-nonprod.theraprac.com/
 
 # Test Ziti API (after Ansible deployment)
 curl -sk https://ziti-nonprod.theraprac.com/edge/client/v1/version
+```
+
+## Ziti Resource Management
+
+Regular audits and cleanup are essential to prevent orphaned Ziti resources. See [Ziti Resource Management Guide](docs/ZITI_RESOURCE_MANAGEMENT.md) for details.
+
+**Quick Commands:**
+```bash
+# Monthly audit
+./scripts/audit-ziti-resources.sh nonprod
+
+# Clean up orphaned resources
+./scripts/cleanup-orphaned-ziti-resources.sh nonprod --dry-run  # Preview
+./scripts/cleanup-orphaned-ziti-resources.sh nonprod           # Interactive cleanup
 ```

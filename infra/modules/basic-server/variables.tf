@@ -28,12 +28,12 @@ variable "tier" {
 }
 
 variable "environment" {
-  description = "Environment: nonprod or prod"
+  description = "Environment: prod, nonprod, dev, test, stage, uat"
   type        = string
   default     = "nonprod"
   validation {
-    condition     = contains(["nonprod", "prod"], var.environment)
-    error_message = "Environment must be one of: nonprod, prod"
+    condition     = contains(["prod", "nonprod", "dev", "test", "stage", "uat"], var.environment)
+    error_message = "Environment must be one of: prod, nonprod, dev, test, stage, uat"
   }
 }
 

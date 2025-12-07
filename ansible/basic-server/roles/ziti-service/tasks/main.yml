@@ -108,7 +108,7 @@
     cmd: >
       /opt/ziti/bin/ziti edge create service {{ ziti_ssh_name }}
       --configs {{ ziti_ssh_name }}.host,{{ ziti_ssh_name }}.intercept
-      --role-attributes ssh-services
+      --role-attributes basic-server-ssh
   register: service_created
 
 # =============================================================================
@@ -134,6 +134,71 @@
       --identity-roles "@{{ ziti_identity_name }}"
       --service-roles "@{{ ziti_ssh_name }}"
   register: bind_policy_created
+
+# =============================================================================
+# Create/Update Dial Policy for Basic Server SSH Services
+# =============================================================================
+# Uses role attributes so all basic-server-ssh services share one policy
+
+- name: Check if basic-server-ssh dial policy exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list service-policies 'name="basic-server-ssh-dial"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: dial_policy_count
+  changed_when: false
+  failed_when: false
+
+- name: Create dial policy for basic-server-ssh services if not exists
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service-policy basic-server-ssh-dial Dial
+      --identity-roles "#ssh-users"
+      --service-roles "#basic-server-ssh"
+  when: dial_policy_count.stdout | default('0') | int == 0
+  register: dial_policy_created
+
+# =============================================================================
+# Create/Update Service-Edge-Router Policy for Basic Server SSH Services
+# =============================================================================
+# Without this, the service can't use any edge routers and will fail with
+# "NO_EDGE_ROUTERS_AVAILABLE" error
+
+- name: Check if basic-server-ssh SERP exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list service-edge-router-policies 'name="basic-server-ssh-serp"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: serp_count
+  changed_when: false
+  failed_when: false
+
+- name: Create service-edge-router policy for basic-server-ssh services if not exists
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create service-edge-router-policy basic-server-ssh-serp
+      --service-roles "#basic-server-ssh"
+      --edge-router-roles "#all"
+  when: serp_count.stdout | default('0') | int == 0
+  register: serp_created
+
+# =============================================================================
+# Create/Update Edge-Router Policy for Basic Server Identities
+# =============================================================================
+# Without this, the identity can't connect to any router to create terminators
+# and will fail with "NO_EDGE_ROUTERS_AVAILABLE" error
+
+- name: Check if basic-servers edge-router-policy exists
+  ansible.builtin.shell: |
+    /opt/ziti/bin/ziti edge list edge-router-policies 'name="basic-servers-routers"' --output-json 2>/dev/null | jq -r '.data | length'
+  register: erp_count
+  changed_when: false
+  failed_when: false
+
+- name: Create edge-router-policy for basic-servers identities if not exists
+  ansible.builtin.command:
+    cmd: >
+      /opt/ziti/bin/ziti edge create edge-router-policy basic-servers-routers
+      --identity-roles "#basic-servers"
+      --edge-router-roles "#routers"
+  when: erp_count.stdout | default('0') | int == 0
+  register: erp_created
 
 # =============================================================================
 # Start ziti-edge-tunnel Service
@@ -171,13 +236,16 @@
       Components Created:
       - Host config (host.v1): {{ ziti_ssh_name }}.host
       - Intercept config:      {{ ziti_ssh_name }}.intercept
-      - Service:               {{ ziti_ssh_name }} (role: ssh-services)
+      - Service:               {{ ziti_ssh_name }} (role: basic-server-ssh)
       - Bind policy:           {{ ziti_ssh_name }}-bind
+      - Dial policy:           basic-server-ssh-dial (shared)
+      - SERP:                  basic-server-ssh-serp (shared)
+      - Edge-router-policy:    basic-servers-routers (shared)
       
       Tunnel Service:
       - Unit: ziti-edge-tunnel@{{ ziti_identity_name }}
       - Status: {{ tunnel_service_status.status.ActiveState | default('unknown') }}
       
-      The service has role attribute #ssh-services, so existing
-      ssh-dial policies will automatically apply for users with #ssh-users role.
+      The service has role attribute #basic-server-ssh, which is separate from
+      the Ziti controller's #ssh-services to avoid bind policy conflicts.
 

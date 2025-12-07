@@ -1,0 +1,21 @@
+---
+# =============================================================================
+# TheraPrac API Role Handlers
+# =============================================================================
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: restart theraprac-api
+  systemd:
+    name: "{{ service_name }}"
+    state: restarted
+  when: not ansible_check_mode
+
+- name: start theraprac-api
+  systemd:
+    name: "{{ service_name }}"
+    state: started
+  when: not ansible_check_mode
+

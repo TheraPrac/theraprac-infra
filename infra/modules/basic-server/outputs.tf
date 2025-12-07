@@ -92,8 +92,8 @@ output "ziti_controller_endpoint" {
 }
 
 output "ziti_identity_name" {
-  description = "Ziti identity name for this server"
-  value       = "basic-server-${local.hyphen_name}"
+  description = "Ziti identity name for this server (matches full_name)"
+  value       = local.full_name
 }
 
 

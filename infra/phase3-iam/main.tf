@@ -29,7 +29,7 @@ terraform {
 }
 
 provider "aws" {
-  region  = var.aws_region
+  region = var.aws_region
   # Note: IAM operations require AdministratorAccess (use jfinlinson_admin profile)
   profile = var.aws_profile
 
@@ -53,9 +53,11 @@ locals {
   name_prefix = var.project_name
 
   # ARN patterns for policy restrictions
-  secrets_arn_pattern    = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${var.project_name}/${var.environment}/*"
-  log_group_arn_pattern  = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/${var.project_name}/${var.environment}/*"
-  log_stream_arn_pattern = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/${var.project_name}/${var.environment}/*:log-stream:*"
+  # Note: API secrets use /theraprac/api/{env}/secrets pattern (separate from infra secrets)
+  secrets_arn_pattern     = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${var.project_name}/${var.environment}/*"
+  api_secrets_arn_pattern = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${var.project_name}/api/*"
+  log_group_arn_pattern   = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/${var.project_name}/${var.environment}/*"
+  log_stream_arn_pattern  = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/${var.project_name}/${var.environment}/*:log-stream:*"
 }
 
 # =============================================================================
@@ -127,6 +129,7 @@ data "aws_iam_policy_document" "secrets_readonly" {
     ]
     resources = [
       local.secrets_arn_pattern,
+      local.api_secrets_arn_pattern,
       "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:ziti/${var.environment}/*"
     ]
   }
@@ -240,6 +243,117 @@ resource "aws_iam_policy" "route53_dns01" {
 }
 
 # =============================================================================
+# Managed Policy: API KMS Permissions
+# =============================================================================
+# KMS permissions for the TheraPrac API:
+#   - Data encryption key (SSN encryption via envelope encryption)
+#   - Signing key (JWT signing)
+#
+# Key alias pattern: alias/theraprac-api-{env}-{key-type}
+# Supports all environments (dev, test, prod) via wildcard
+
+data "aws_iam_policy_document" "api_kms" {
+  # Data encryption operations (GenerateDataKey + Decrypt for envelope encryption)
+  statement {
+    sid    = "KMSDataKeyOperations"
+    effect = "Allow"
+    actions = [
+      "kms:GenerateDataKey",
+      "kms:Decrypt",
+    ]
+    resources = [
+      "arn:aws:kms:${var.aws_region}:${local.account_id}:key/*"
+    ]
+    condition {
+      test     = "ForAnyValue:StringLike"
+      variable = "kms:ResourceAliases"
+      values   = ["alias/theraprac-api-*-data-key"]
+    }
+  }
+
+  # JWT signing operations (Sign + GetPublicKey for JWKS)
+  statement {
+    sid    = "KMSSigningOperations"
+    effect = "Allow"
+    actions = [
+      "kms:Sign",
+      "kms:GetPublicKey",
+    ]
+    resources = [
+      "arn:aws:kms:${var.aws_region}:${local.account_id}:key/*"
+    ]
+    condition {
+      test     = "ForAnyValue:StringLike"
+      variable = "kms:ResourceAliases"
+      values   = ["alias/theraprac-api-*-signing-key"]
+    }
+  }
+
+  # Allow describing keys (needed to resolve aliases)
+  statement {
+    sid    = "KMSDescribeKey"
+    effect = "Allow"
+    actions = [
+      "kms:DescribeKey",
+    ]
+    resources = [
+      "arn:aws:kms:${var.aws_region}:${local.account_id}:key/*"
+    ]
+    condition {
+      test     = "ForAnyValue:StringLike"
+      variable = "kms:ResourceAliases"
+      values = [
+        "alias/theraprac-api-*-data-key",
+        "alias/theraprac-api-*-signing-key"
+      ]
+    }
+  }
+}
+
+resource "aws_iam_policy" "api_kms" {
+  name        = "TheraPrac-API-KMS"
+  description = "KMS permissions for TheraPrac API (data encryption and JWT signing)"
+  policy      = data.aws_iam_policy_document.api_kms.json
+
+  tags = {
+    Name = "TheraPrac-API-KMS"
+  }
+}
+
+# =============================================================================
+# Managed Policy: API SSM Parameter Store Permissions
+# =============================================================================
+# SSM permissions for the TheraPrac API to read configuration.
+#
+# Parameter path pattern: /theraprac/api/{env}/*
+# Supports all environments (dev, test, prod) via wildcard
+
+data "aws_iam_policy_document" "api_ssm" {
+  statement {
+    sid    = "SSMParameterStoreRead"
+    effect = "Allow"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:GetParametersByPath",
+    ]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/theraprac/api/*"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "api_ssm" {
+  name        = "TheraPrac-API-SSM"
+  description = "SSM Parameter Store read access for TheraPrac API configuration"
+  policy      = data.aws_iam_policy_document.api_ssm.json
+
+  tags = {
+    Name = "TheraPrac-API-SSM"
+  }
+}
+
+# =============================================================================
 # IAM Role: Ziti Controller
 # =============================================================================
 # Policies: Base + Observability + Secrets (for bootstrap config)
@@ -267,6 +381,11 @@ resource "aws_iam_role_policy_attachment" "ziti_controller_observability" {
 resource "aws_iam_role_policy_attachment" "ziti_controller_secrets" {
   role       = aws_iam_role.ziti_controller.name
   policy_arn = aws_iam_policy.secrets_readonly.arn
+}
+
+resource "aws_iam_role_policy_attachment" "ziti_controller_route53" {
+  role       = aws_iam_role.ziti_controller.name
+  policy_arn = aws_iam_policy.route53_dns01.arn
 }
 
 resource "aws_iam_instance_profile" "ziti_controller" {
@@ -345,6 +464,16 @@ resource "aws_iam_role_policy_attachment" "app_server_observability" {
 resource "aws_iam_role_policy_attachment" "app_server_route53" {
   role       = aws_iam_role.app_server.name
   policy_arn = aws_iam_policy.route53_dns01.arn
+}
+
+resource "aws_iam_role_policy_attachment" "app_server_kms" {
+  role       = aws_iam_role.app_server.name
+  policy_arn = aws_iam_policy.api_kms.arn
+}
+
+resource "aws_iam_role_policy_attachment" "app_server_ssm" {
+  role       = aws_iam_role.app_server.name
+  policy_arn = aws_iam_policy.api_ssm.arn
 }
 
 resource "aws_iam_instance_profile" "app_server" {

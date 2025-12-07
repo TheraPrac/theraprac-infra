@@ -1,0 +1,258 @@
+# =============================================================================
+# TheraPrac Infrastructure - Ziti Cleanup Playbook
+# =============================================================================
+# Removes Ziti resources (identities, services, configs, policies) for a
+# specific basic server. This MUST be run BEFORE destroying the server with
+# Terraform to prevent orphaned Ziti resources.
+#
+# IMPORTANT: This playbook runs on localhost and connects directly to the
+# Ziti controller API. The server does NOT need to be running or accessible.
+# You can run this even if the server is already terminated.
+#
+# Usage:
+#   ansible-playbook -i inventory/server-eice.yml cleanup-ziti.yml \
+#     -e "server_name=app.mt.nonprod" \
+#     -e "ziti_ssh_name=ssh.app.mt.nonprod.ziti" \
+#     -e "ziti_identity_name=basic-server-app-mt-nonprod" \
+#     -e "ziti_controller_endpoint=https://ziti-nonprod.theraprac.com"
+#
+# Or use the wrapper script:
+#   ./scripts/cleanup-basic-server-ziti.sh app mt nonprod
+#
+# Required variables:
+#   - server_name: Full name (e.g., app.mt.nonprod)
+#   - ziti_ssh_name: Ziti SSH service name (e.g., ssh.app.mt.nonprod.ziti)
+#   - ziti_identity_name: Identity name (e.g., basic-server-app-mt-nonprod)
+#   - ziti_controller_endpoint: Controller URL (e.g., https://ziti-nonprod.theraprac.com)
+#
+# Optional variables:
+#   - app_domain: Web app domain (if HTTPS services were added, e.g., app-dev.theraprac.com)
+#   - api_domain: API domain (if HTTPS services were added, e.g., api-dev.theraprac.com)
+# =============================================================================
+
+---
+- name: Cleanup Ziti Resources for Basic Server
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    aws_region: us-west-2
+    ziti_secrets_manager_path: "ziti/nonprod/admin-password"
+
+  tasks:
+    # =========================================================================
+    # Validate Required Variables
+    # =========================================================================
+
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - server_name is defined
+          - ziti_ssh_name is defined
+          - ziti_identity_name is defined
+          - ziti_controller_endpoint is defined
+        fail_msg: "Required variables must be defined: server_name, ziti_ssh_name, ziti_identity_name, ziti_controller_endpoint"
+
+    # =========================================================================
+    # Get Admin Credentials
+    # =========================================================================
+
+    - name: Get admin password from AWS Secrets Manager
+      ansible.builtin.command:
+        cmd: >
+          aws secretsmanager get-secret-value
+          --secret-id {{ ziti_secrets_manager_path }}
+          --query 'SecretString'
+          --output text
+          --region {{ aws_region }}
+      register: sm_secret_result
+      no_log: true
+      changed_when: false
+
+    - name: Set admin password fact
+      ansible.builtin.set_fact:
+        ziti_admin_password: "{{ sm_secret_result.stdout | trim }}"
+      no_log: true
+
+    # =========================================================================
+    # Login to Ziti Controller
+    # =========================================================================
+
+    - name: Login to Ziti controller
+      ansible.builtin.command:
+        cmd: >
+          ziti edge login
+          {{ ziti_controller_endpoint }}
+          --yes
+          --username admin
+          --password "{{ ziti_admin_password }}"
+      no_log: true
+      changed_when: true
+
+    # =========================================================================
+    # Cleanup HTTPS Services (if they exist)
+    # =========================================================================
+
+    - name: Check if web HTTPS service exists
+      ansible.builtin.shell: |
+        ziti edge list services 'name="https.{{ app_domain }}"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: web_service_count
+      changed_when: false
+      failed_when: false
+      when: app_domain is defined
+
+    - name: Delete web HTTPS service
+      ansible.builtin.command:
+        cmd: ziti edge delete service "https.{{ app_domain }}"
+      when:
+        - app_domain is defined
+        - web_service_count.stdout | default('0') | int > 0
+      register: web_service_deleted
+
+    - name: Delete web HTTPS host config
+      ansible.builtin.command:
+        cmd: ziti edge delete config "https.{{ app_domain }}.host"
+      when:
+        - app_domain is defined
+        - web_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    - name: Delete web HTTPS intercept config
+      ansible.builtin.command:
+        cmd: ziti edge delete config "https.{{ app_domain }}.intercept"
+      when:
+        - app_domain is defined
+        - web_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    - name: Delete web HTTPS bind policy
+      ansible.builtin.command:
+        cmd: ziti edge delete service-policy "https.{{ app_domain }}-bind"
+      when:
+        - app_domain is defined
+        - web_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    - name: Check if API HTTPS service exists
+      ansible.builtin.shell: |
+        ziti edge list services 'name="https.{{ api_domain }}"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: api_service_count
+      changed_when: false
+      failed_when: false
+      when: api_domain is defined
+
+    - name: Delete API HTTPS service
+      ansible.builtin.command:
+        cmd: ziti edge delete service "https.{{ api_domain }}"
+      when:
+        - api_domain is defined
+        - api_service_count.stdout | default('0') | int > 0
+      register: api_service_deleted
+
+    - name: Delete API HTTPS host config
+      ansible.builtin.command:
+        cmd: ziti edge delete config "https.{{ api_domain }}.host"
+      when:
+        - api_domain is defined
+        - api_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    - name: Delete API HTTPS intercept config
+      ansible.builtin.command:
+        cmd: ziti edge delete config "https.{{ api_domain }}.intercept"
+      when:
+        - api_domain is defined
+        - api_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    - name: Delete API HTTPS bind policy
+      ansible.builtin.command:
+        cmd: ziti edge delete service-policy "https.{{ api_domain }}-bind"
+      when:
+        - api_domain is defined
+        - api_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    # =========================================================================
+    # Cleanup SSH Service
+    # =========================================================================
+
+    - name: Check if SSH service exists
+      ansible.builtin.shell: |
+        ziti edge list services 'name="{{ ziti_ssh_name }}"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: ssh_service_count
+      changed_when: false
+      failed_when: false
+
+    - name: Delete SSH service
+      ansible.builtin.command:
+        cmd: ziti edge delete service "{{ ziti_ssh_name }}"
+      when: ssh_service_count.stdout | default('0') | int > 0
+      register: ssh_service_deleted
+
+    - name: Delete SSH host config
+      ansible.builtin.command:
+        cmd: ziti edge delete config "{{ ziti_ssh_name }}.host"
+      when: ssh_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    - name: Delete SSH intercept config
+      ansible.builtin.command:
+        cmd: ziti edge delete config "{{ ziti_ssh_name }}.intercept"
+      when: ssh_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    - name: Delete SSH bind policy
+      ansible.builtin.command:
+        cmd: ziti edge delete service-policy "{{ ziti_ssh_name }}-bind"
+      when: ssh_service_count.stdout | default('0') | int > 0
+      failed_when: false
+
+    # =========================================================================
+    # Cleanup Identity
+    # =========================================================================
+
+    - name: Check if identity exists
+      ansible.builtin.shell: |
+        ziti edge list identities 'name="{{ ziti_identity_name }}"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: identity_count
+      changed_when: false
+      failed_when: false
+
+    - name: Delete identity
+      ansible.builtin.command:
+        cmd: ziti edge delete identity "{{ ziti_identity_name }}"
+      when: identity_count.stdout | default('0') | int > 0
+      register: identity_deleted
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+
+    - name: Display cleanup summary
+      ansible.builtin.debug:
+        msg: |
+          Ziti Cleanup Complete for {{ server_name }}
+          ==========================================
+          
+          Resources Cleaned:
+          {% if app_domain is defined and web_service_deleted is defined and web_service_deleted.changed %}
+          - Web HTTPS service: https.{{ app_domain }}
+          {% endif %}
+          {% if api_domain is defined and api_service_deleted is defined and api_service_deleted.changed %}
+          - API HTTPS service: https.{{ api_domain }}
+          {% endif %}
+          {% if ssh_service_deleted is defined and ssh_service_deleted.changed %}
+          - SSH service: {{ ziti_ssh_name }}
+          {% endif %}
+          {% if identity_deleted is defined and identity_deleted.changed %}
+          - Identity: {{ ziti_identity_name }}
+          {% endif %}
+          
+          {% if (app_domain is not defined or web_service_count.stdout | default('0') | int == 0) and (api_domain is not defined or api_service_count.stdout | default('0') | int == 0) and ssh_service_count.stdout | default('0') | int == 0 and identity_count.stdout | default('0') | int == 0 %}
+          No resources found to clean up (may have already been removed).
+          {% endif %}
+          
+          ✅ Safe to destroy server with Terraform now.
+

@@ -1,0 +1,99 @@
+---
+# =============================================================================
+# TheraPrac API Deployment Playbook
+# =============================================================================
+#
+# Deploys the TheraPrac API to target servers.
+#
+# Usage:
+#   # Deploy latest build to dev environment
+#   ansible-playbook deploy-api.yml -i inventory/dev -e "target_env=dev version=latest"
+#
+#   # Deploy specific version to prod
+#   ansible-playbook deploy-api.yml -i inventory/prod -e "target_env=prod version=1.2.3"
+#
+#   # Dry run (check mode)
+#   ansible-playbook deploy-api.yml -i inventory/dev -e "target_env=dev version=latest" --check
+#
+# Required variables (pass via -e or inventory):
+#   target_env: dev | test | prod
+#   version: latest | x.y.z (semantic version)
+#
+# Optional variables:
+#   s3_bucket: Override S3 bucket for artifacts
+#   aws_account_id: Override AWS account ID
+# =============================================================================
+
+- name: Deploy TheraPrac API
+  hosts: app_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    # Default AWS region
+    aws_region: us-west-2
+    
+    # Default S3 bucket (should be overridden in inventory)
+    s3_bucket: "{{ lookup('env', 'THERAPRAC_S3_BUCKET') | default('theraprac-artifacts', true) }}"
+    
+    # AWS account ID (should be overridden in inventory)
+    aws_account_id: "{{ lookup('env', 'AWS_ACCOUNT_ID') | default('', true) }}"
+
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - target_env is defined
+          - target_env in ['dev', 'test', 'prod']
+          - version is defined
+        fail_msg: |
+          Missing required variables!
+          
+          Required:
+            - target_env: Target environment (dev, test, or prod)
+            - version: Version to deploy (latest or semantic version like 1.2.3)
+          
+          Example:
+            ansible-playbook deploy-api.yml -i inventory/dev -e "target_env=dev version=latest"
+
+    - name: Get AWS account ID if not provided
+      command: aws sts get-caller-identity --query Account --output text
+      register: aws_account_result
+      changed_when: false
+      when: aws_account_id == ''
+
+    - name: Set AWS account ID from CLI
+      set_fact:
+        aws_account_id: "{{ aws_account_result.stdout }}"
+      when: aws_account_id == ''
+
+    - name: Display deployment info
+      debug:
+        msg: |
+          TheraPrac API Deployment
+          ========================
+          Target Environment: {{ target_env }}
+          Version: {{ version }}
+          AWS Region: {{ aws_region }}
+          AWS Account: {{ aws_account_id }}
+          S3 Bucket: {{ s3_bucket }}
+          Target Hosts: {{ ansible_play_hosts | join(', ') }}
+
+  roles:
+    - role: theraprac-api
+
+  post_tasks:
+    - name: Deployment complete
+      debug:
+        msg: |
+          ✅ TheraPrac API deployment complete!
+          
+          Service Status:
+            systemctl status theraprac-api
+          
+          View Logs:
+            journalctl -u theraprac-api -f
+          
+          Health Check:
+            curl http://localhost:8080/healthz
+

@@ -80,12 +80,28 @@ data "terraform_remote_state" "ziti" {
 locals {
   # Subnet lookup based on tier + environment
   # All basic servers go in az1 for now
+  # Non-production environments (nonprod, dev, test, stage, uat) use nonprod subnets
+  # Production environment uses prod subnets
   subnet_map = {
+    # Non-production environments
     "app.nonprod"  = data.terraform_remote_state.vpc.outputs.private_app_nonprod_subnet_ids_by_az["az1"]
-    "app.prod"     = data.terraform_remote_state.vpc.outputs.private_app_prod_subnet_ids_by_az["az1"]
+    "app.dev"      = data.terraform_remote_state.vpc.outputs.private_app_nonprod_subnet_ids_by_az["az1"]
+    "app.test"     = data.terraform_remote_state.vpc.outputs.private_app_nonprod_subnet_ids_by_az["az1"]
+    "app.stage"    = data.terraform_remote_state.vpc.outputs.private_app_nonprod_subnet_ids_by_az["az1"]
+    "app.uat"      = data.terraform_remote_state.vpc.outputs.private_app_nonprod_subnet_ids_by_az["az1"]
     "db.nonprod"   = data.terraform_remote_state.vpc.outputs.private_db_nonprod_subnet_ids_by_az["az1"]
-    "db.prod"      = data.terraform_remote_state.vpc.outputs.private_db_prod_subnet_ids_by_az["az1"]
+    "db.dev"       = data.terraform_remote_state.vpc.outputs.private_db_nonprod_subnet_ids_by_az["az1"]
+    "db.test"      = data.terraform_remote_state.vpc.outputs.private_db_nonprod_subnet_ids_by_az["az1"]
+    "db.stage"     = data.terraform_remote_state.vpc.outputs.private_db_nonprod_subnet_ids_by_az["az1"]
+    "db.uat"       = data.terraform_remote_state.vpc.outputs.private_db_nonprod_subnet_ids_by_az["az1"]
     "ziti.nonprod" = data.terraform_remote_state.vpc.outputs.private_ziti_nonprod_subnet_ids_by_az["az1"]
+    "ziti.dev"     = data.terraform_remote_state.vpc.outputs.private_ziti_nonprod_subnet_ids_by_az["az1"]
+    "ziti.test"    = data.terraform_remote_state.vpc.outputs.private_ziti_nonprod_subnet_ids_by_az["az1"]
+    "ziti.stage"   = data.terraform_remote_state.vpc.outputs.private_ziti_nonprod_subnet_ids_by_az["az1"]
+    "ziti.uat"     = data.terraform_remote_state.vpc.outputs.private_ziti_nonprod_subnet_ids_by_az["az1"]
+    # Production environment
+    "app.prod"     = data.terraform_remote_state.vpc.outputs.private_app_prod_subnet_ids_by_az["az1"]
+    "db.prod"      = data.terraform_remote_state.vpc.outputs.private_db_prod_subnet_ids_by_az["az1"]
     "ziti.prod"    = data.terraform_remote_state.vpc.outputs.private_ziti_prod_subnet_ids_by_az["az1"]
   }
 

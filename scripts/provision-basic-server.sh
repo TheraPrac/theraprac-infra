@@ -19,10 +19,10 @@
 #   ./scripts/provision-basic-server.sh -y            # Short form (auto-accept)
 #
 # The script will prompt for:
-#   - Name: Server purpose (e.g., "app")
-#   - Role: Specific identifier (e.g., "mt")
-#   - Tier: Subnet tier (app, db, ziti)
-#   - Environment: nonprod or prod
+#   - Name: Server purpose (app, api, web, database, cache, queue, worker, scheduler)
+#   - Role: Identifier (api, web, db, cache, queue, worker, scheduler, mt)
+#   - Tier: Determines subnet placement (app, db, ziti)
+#   - Environment: prod, nonprod, dev, test, stage, uat
 #   - Instance type: t4g.micro, t4g.small, etc.
 #   - Architecture: arm64 or x86_64
 # =============================================================================
@@ -92,6 +92,7 @@ prompt_choice() {
     local options="$3"
     local default_value="$4"
     local value
+    local valid=false
 
     echo -e "${BLUE}$prompt_text${NC}"
     echo "  Options: $options"
@@ -106,14 +107,38 @@ prompt_choice() {
             exit 1
         fi
     else
-        if [ -n "$default_value" ]; then
-            read -p "  Choice [$default_value]: " value
-            value="${value:-$default_value}"
-        else
-            while [ -z "$value" ]; do
+        while [ "$valid" = "false" ]; do
+            if [ -n "$default_value" ]; then
+                read -p "  Choice [$default_value]: " value
+                value="${value:-$default_value}"
+            else
                 read -p "  Choice: " value
-            done
-        fi
+            fi
+            
+            # Validate choice is in options list
+            if [ -n "$value" ]; then
+                # Convert options string to array and check if value is in it
+                # Replace commas with spaces, then split into array
+                local options_normalized=$(echo "$options" | tr ',' ' ')
+                local found=false
+                for option in $options_normalized; do
+                    # Trim whitespace from option
+                    option=$(echo "$option" | xargs)
+                    if [ "$option" = "$value" ]; then
+                        found=true
+                        break
+                    fi
+                done
+                
+                if [ "$found" = "true" ]; then
+                    valid=true
+                else
+                    echo -e "${RED}Invalid choice '$value'. Please select from: $options${NC}"
+                fi
+            else
+                echo -e "${RED}This field is required.${NC}"
+            fi
+        done
     fi
 
     eval "$var_name=\"$value\""
@@ -285,19 +310,19 @@ if load_cache && [ -n "$CACHED_NAME" ]; then
     else
         # User wants to enter new values - clear cache and prompt
         rm -f "$CACHE_FILE"
-        prompt NAME "Name (server purpose, e.g., 'app')" ""
-        prompt ROLE "Role (identifier, e.g., 'mt')" ""
-        prompt_choice TIER "Tier (subnet)" "app, db, ziti" "app"
-        prompt_choice ENV "Environment" "nonprod, prod" "nonprod"
+        prompt_choice NAME "Name (server purpose)" "app, api, web, database, cache, queue, worker, scheduler" "app"
+        prompt_choice ROLE "Role (identifier)" "api, web, db, cache, queue, worker, scheduler, mt" "api"
+        prompt_choice TIER "Tier (determines subnet: app, db, or ziti)" "app, db, ziti" "app"
+        prompt_choice ENV "Environment" "prod, nonprod, dev, test, stage, uat" "nonprod"
         prompt INSTANCE_TYPE "Instance type" "t4g.micro"
         prompt_choice ARCH "Architecture" "arm64, x86_64" "arm64"
     fi
 else
     # No cache - prompt for all values
-    prompt NAME "Name (server purpose, e.g., 'app')" ""
-    prompt ROLE "Role (identifier, e.g., 'mt')" ""
-    prompt_choice TIER "Tier (subnet)" "app, db, ziti" "app"
-    prompt_choice ENV "Environment" "nonprod, prod" "nonprod"
+    prompt_choice NAME "Name (server purpose)" "app, api, web, database, cache, queue, worker, scheduler" "app"
+    prompt_choice ROLE "Role (identifier)" "api, web, db, cache, queue, worker, scheduler, mt" "api"
+    prompt_choice TIER "Tier (determines subnet: app, db, or ziti)" "app, db, ziti" "app"
+    prompt_choice ENV "Environment" "prod, nonprod, dev, test, stage, uat" "nonprod"
     prompt INSTANCE_TYPE "Instance type" "t4g.micro"
     prompt_choice ARCH "Architecture" "arm64, x86_64" "arm64"
 fi
@@ -308,14 +333,13 @@ HYPHEN_NAME="${NAME}-${ROLE}-${ENV}"
 SUBNET="private-${TIER}-${ENV}-az1"
 INTERNAL_DNS="${HYPHEN_NAME}.theraprac-internal.com"
 ZITI_SSH="ssh.${FULL_NAME}.ziti"
-ZITI_IDENTITY_NAME="basic-server-${HYPHEN_NAME}"
+ZITI_IDENTITY_NAME="${FULL_NAME}"
 
 echo ""
 echo -e "${BLUE}=== Configuration Summary ===${NC}"
 echo ""
 echo -e "  Full Name:     ${GREEN}${FULL_NAME}${NC}"
-echo -e "  Tier:          ${TIER}"
-echo -e "  Subnet:        ${SUBNET}"
+echo -e "  Subnet:        ${SUBNET} (tier: ${TIER})"
 echo -e "  Instance Type: ${INSTANCE_TYPE}"
 echo -e "  Architecture:  ${ARCH}"
 echo ""

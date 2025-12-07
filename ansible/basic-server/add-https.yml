@@ -87,11 +87,61 @@
     # Verify Ziti Tunnel is Running
     # =========================================================================
 
+    - name: Check if systemd service file exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/ziti-edge-tunnel@.service
+      register: service_file
+
+    - name: Create systemd service template if missing
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Ziti Edge Tunnel (%i)
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/opt/ziti/bin/ziti-edge-tunnel run-host -i /opt/ziti/cfg/%i.json
+          Restart=always
+          RestartSec=5
+          StandardOutput=append:/opt/ziti/logs/%i.log
+          StandardError=append:/opt/ziti/logs/%i.log
+
+          # Security hardening
+          NoNewPrivileges=yes
+          ProtectSystem=strict
+          ProtectHome=yes
+          ReadWritePaths=/opt/ziti/logs /opt/ziti/cfg
+          PrivateTmp=yes
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/ziti-edge-tunnel@.service
+        mode: '0644'
+        owner: root
+        group: root
+      when: not service_file.stat.exists
+
+    - name: Reload systemd if service file was created
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: not service_file.stat.exists
+
     - name: Check if ziti-edge-tunnel is running
       ansible.builtin.systemd:
         name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
       register: tunnel_status
-      failed_when: tunnel_status.status.ActiveState != 'active'
+      failed_when: false
+      changed_when: false
+
+    - name: Start ziti-edge-tunnel if not running
+      ansible.builtin.systemd:
+        name: "ziti-edge-tunnel@{{ ziti_identity_name }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: tunnel_status.status.ActiveState != 'active'
 
   roles:
     # =========================================================================
