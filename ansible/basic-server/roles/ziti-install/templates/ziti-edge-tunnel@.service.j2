@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/ziti/bin/ziti-edge-tunnel run-host -i /opt/ziti/cfg/%i.json
+ExecStart=/opt/ziti/bin/ziti-edge-tunnel run -i /opt/ziti/cfg/%i.json
 Restart=always
 RestartSec=5
 StandardOutput=append:/opt/ziti/logs/%i.log

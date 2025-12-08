@@ -75,3 +75,4 @@ id_ed25519
 !*.tfvars.example
 .provision-basic-server-cache
 .add-https-cache
+.deploy-api-cache

@@ -1,0 +1,287 @@
+# =============================================================================
+# Ziti Database Service - Create PostgreSQL Service
+# =============================================================================
+# Creates a Ziti service for PostgreSQL database access.
+# This playbook runs on the Ziti controller to create the service.
+#
+# Prerequisites:
+#   - RDS instance must be deployed (phase5-rds)
+#   - Edge router identity (ziti.edge-router.nonprod) must exist
+#   - Client identities (joe-dev, app.mt.dev) must exist
+#
+# Usage:
+#   # From ansible/ziti-nonprod directory:
+#   ansible-playbook -i inventory/ziti.yml create-db-service.yml \
+#     -e "rds_endpoint=<rds-endpoint>" \
+#     -e "db_environment=dev"
+#
+#   # Or get endpoint from Terraform:
+#   RDS_ENDPOINT=$(cd ../../infra/phase5-rds && terraform output -raw db_address)
+#   ansible-playbook -i inventory/ziti.yml create-db-service.yml \
+#     -e "rds_endpoint=$RDS_ENDPOINT" \
+#     -e "db_environment=dev"
+# =============================================================================
+
+---
+- name: Create Ziti Database Service
+  hosts: ziti-nonprod
+  become: true
+  gather_facts: false
+
+  vars:
+    # Database configuration
+    db_environment: "dev"
+    db_port: 5432
+    
+    # Ziti service naming
+    service_name: "postgres.db.{{ db_environment }}.app.ziti"
+    
+    # Identity that hosts the service (edge-router with ziti-edge-tunnel)
+    bind_identity: "ziti.edge-router.nonprod"
+    
+    # Identities that can dial (access) the service
+    dial_identities:
+      - "joe-dev"
+      - "app.mt.dev"
+    
+    # Service role attributes
+    service_role: "db-services"
+    
+    # Ziti paths
+    ziti_bin: "/opt/ziti/bin/ziti"
+    ziti_controller_dir: "/opt/ziti/controller"
+
+  tasks:
+    # =========================================================================
+    # Validate Required Variables
+    # =========================================================================
+    
+    - name: Validate rds_endpoint is provided
+      ansible.builtin.fail:
+        msg: "rds_endpoint variable is required. Pass it with -e 'rds_endpoint=<endpoint>'"
+      when: rds_endpoint is not defined or rds_endpoint == ""
+
+    # =========================================================================
+    # Login to Ziti Controller
+    # =========================================================================
+    
+    - name: Read admin password from file
+      ansible.builtin.slurp:
+        src: "{{ ziti_controller_dir }}/.admin_password"
+      register: admin_pass_b64
+
+    - name: Set password fact
+      ansible.builtin.set_fact:
+        ziti_admin_password: "{{ admin_pass_b64.content | b64decode | trim }}"
+      no_log: true
+
+    - name: Login to Ziti controller
+      ansible.builtin.command:
+        cmd: >
+          {{ ziti_bin }} edge login
+          https://127.0.0.1:443
+          --yes
+          --username admin
+          --password "{{ ziti_admin_password }}"
+      no_log: true
+      changed_when: true
+
+    # =========================================================================
+    # Check Existing Resources
+    # =========================================================================
+
+    - name: Check if host config exists
+      ansible.builtin.shell: |
+        {{ ziti_bin }} edge list configs 'name="{{ service_name }}.host"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: host_config_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Check if intercept config exists
+      ansible.builtin.shell: |
+        {{ ziti_bin }} edge list configs 'name="{{ service_name }}.intercept"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: intercept_config_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Check if service exists
+      ansible.builtin.shell: |
+        {{ ziti_bin }} edge list services 'name="{{ service_name }}"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: service_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Check if bind policy exists
+      ansible.builtin.shell: |
+        {{ ziti_bin }} edge list service-policies 'name="{{ service_name }}-bind"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: bind_policy_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Check if dial policy exists
+      ansible.builtin.shell: |
+        {{ ziti_bin }} edge list service-policies 'name="{{ service_name }}-dial"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: dial_policy_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Check if SERP exists
+      ansible.builtin.shell: |
+        {{ ziti_bin }} edge list service-edge-router-policies 'name="{{ service_name }}-serp"' --output-json 2>/dev/null | jq -r '.data | length'
+      register: serp_exists
+      changed_when: false
+      failed_when: false
+
+    # =========================================================================
+    # Create Host Config (host.v1)
+    # =========================================================================
+    # Points to the RDS endpoint on port 5432
+    # NOTE: Must use host.v1 format - ziti-edge-tunnel only auto-creates
+    # terminators for services with host.v1 configs
+
+    - name: Create host.v1 config for PostgreSQL
+      ansible.builtin.command:
+        cmd: >
+          {{ ziti_bin }} edge create config {{ service_name }}.host host.v1
+          '{"protocol":"tcp","address":"{{ rds_endpoint }}","port":{{ db_port }}}'
+      register: host_config_created
+      when: host_config_exists.stdout | default('0') | int == 0
+
+    # =========================================================================
+    # Create Intercept Config (intercept.v1)
+    # =========================================================================
+    # What clients dial - the Ziti service name on port 5432
+
+    - name: Create intercept.v1 config for PostgreSQL
+      ansible.builtin.command:
+        cmd: >
+          {{ ziti_bin }} edge create config {{ service_name }}.intercept intercept.v1
+          '{"protocols":["tcp"],"addresses":["{{ service_name }}"],"portRanges":[{"low":{{ db_port }},"high":{{ db_port }}}]}'
+      register: intercept_config_created
+      when: intercept_config_exists.stdout | default('0') | int == 0
+
+    # =========================================================================
+    # Create Service
+    # =========================================================================
+
+    - name: Create PostgreSQL service with configs and role attributes
+      ansible.builtin.command:
+        cmd: >
+          {{ ziti_bin }} edge create service {{ service_name }}
+          --configs {{ service_name }}.host,{{ service_name }}.intercept
+          --role-attributes {{ service_role }}
+      register: service_created
+      when: service_exists.stdout | default('0') | int == 0
+
+    # =========================================================================
+    # Create Bind Policy (Identity-Based)
+    # =========================================================================
+    # Allows the edge-router identity to host (bind) this service
+
+    - name: Create bind policy for edge-router
+      ansible.builtin.command:
+        cmd: >
+          {{ ziti_bin }} edge create service-policy {{ service_name }}-bind Bind
+          --identity-roles "@{{ bind_identity }}"
+          --service-roles "@{{ service_name }}"
+      register: bind_policy_created
+      when: bind_policy_exists.stdout | default('0') | int == 0
+
+    # =========================================================================
+    # Create Dial Policy (Identity-Based - 1:1 Mapping)
+    # =========================================================================
+    # Only specific identities can dial this service (joe-dev, app.mt.dev)
+    # Using identity-based policy instead of role-based for strict access control
+
+    - name: Build identity roles string for dial policy
+      ansible.builtin.set_fact:
+        dial_identity_roles: "{{ dial_identities | map('regex_replace', '^(.*)$', '@\\1') | join(',') }}"
+
+    - name: Create dial policy for authorized identities
+      ansible.builtin.command:
+        cmd: >
+          {{ ziti_bin }} edge create service-policy {{ service_name }}-dial Dial
+          --identity-roles "{{ dial_identity_roles }}"
+          --service-roles "@{{ service_name }}"
+      register: dial_policy_created
+      when: dial_policy_exists.stdout | default('0') | int == 0
+
+    # =========================================================================
+    # Create Service-Edge-Router Policy
+    # =========================================================================
+    # Without this, the service can't use any edge routers
+
+    - name: Create service-edge-router policy
+      ansible.builtin.command:
+        cmd: >
+          {{ ziti_bin }} edge create service-edge-router-policy {{ service_name }}-serp
+          --service-roles "#{{ service_role }}"
+          --edge-router-roles "#all"
+      register: serp_created
+      when: serp_exists.stdout | default('0') | int == 0
+
+    # =========================================================================
+    # Display Summary
+    # =========================================================================
+
+    - name: Display service configuration summary
+      ansible.builtin.debug:
+        msg: |
+          
+          =========================================
+          Ziti Database Service Configuration
+          =========================================
+          
+          Service Name:     {{ service_name }}
+          RDS Endpoint:     {{ rds_endpoint }}:{{ db_port }}
+          Service Role:     {{ service_role }}
+          
+          Bind Identity:    {{ bind_identity }}
+          Dial Identities:  {{ dial_identities | join(', ') }}
+          
+          Resources:
+            Host config:      {{ 'CREATED' if (host_config_created is changed) else 'exists' }}
+            Intercept config: {{ 'CREATED' if (intercept_config_created is changed) else 'exists' }}
+            Service:          {{ 'CREATED' if (service_created is changed) else 'exists' }}
+            Bind policy:      {{ 'CREATED' if (bind_policy_created is changed) else 'exists' }}
+            Dial policy:      {{ 'CREATED' if (dial_policy_created is changed) else 'exists' }}
+            SERP:             {{ 'CREATED' if (serp_created is changed) else 'exists' }}
+          
+          Connection Info:
+            Host:     {{ service_name }}
+            Port:     {{ db_port }}
+            SSL Mode: require
+          
+          =========================================
+
+# =============================================================================
+# Play 2: Restart Edge Router Tunneler to Create Terminator
+# =============================================================================
+# The edge-router's ziti-edge-tunnel needs to be restarted to pick up the new
+# service and create a terminator. Without this, the service won't be reachable.
+
+- name: Restart Edge Router Tunneler
+  hosts: ziti-edge-router
+  become: true
+  gather_facts: false
+  
+  vars:
+    bind_identity: "ziti.edge-router.nonprod"
+
+  tasks:
+    - name: Restart ziti-edge-tunnel to pick up new service
+      ansible.builtin.systemd:
+        name: "ziti-edge-tunnel@{{ bind_identity }}"
+        state: restarted
+      register: tunneler_restarted
+
+    - name: Wait for tunneler to initialize
+      ansible.builtin.pause:
+        seconds: 10
+      when: tunneler_restarted is changed
+
+    - name: Display tunneler restart status
+      ansible.builtin.debug:
+        msg: "Edge router tunneler restarted - terminator should be created shortly"
+      when: tunneler_restarted is changed
+

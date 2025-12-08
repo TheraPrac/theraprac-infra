@@ -5,13 +5,19 @@
 # Creates a private EC2 instance with self-hosted Ziti tunneler for SSH access.
 #
 # This script:
-#   1. Destroys any existing infrastructure (clean slate)
-#   2. Creates EC2 instance with Ziti binaries installed
-#   3. Runs Ansible ON the server (via EICE) to:
+#   1. Creates/selects a Terraform workspace for the server (enables multiple servers)
+#   2. Optionally destroys existing infrastructure in that workspace (if it exists)
+#   3. Creates EC2 instance with Ziti binaries installed
+#   4. Runs Ansible ON the server (via EICE) to:
 #      - Create Ziti identity
 #      - Enroll identity
 #      - Register SSH service
 #      - Start ziti-edge-tunnel
+#
+# Workspace Management:
+#   Each server gets its own Terraform workspace (named after the server, e.g., 
+#   'ziti.edge-router.nonprod'). This allows managing multiple servers independently
+#   with separate state files. Workspaces are automatically created/selected as needed.
 #
 # Usage:
 #   ./scripts/provision-basic-server.sh              # Interactive mode
@@ -19,12 +25,29 @@
 #   ./scripts/provision-basic-server.sh -y            # Short form (auto-accept)
 #
 # The script will prompt for:
-#   - Name: Server purpose (app, api, web, database, cache, queue, worker, scheduler)
-#   - Role: Identifier (api, web, db, cache, queue, worker, scheduler, mt)
+#   - Name: Server purpose (app, api, web, database, cache, queue, worker, scheduler, ziti)
+#   - Role: Descriptive identifier (e.g., 'controller', 'router', 'edge-router', 'api', 'web', 'db', etc.)
 #   - Tier: Determines subnet placement (app, db, ziti)
 #   - Environment: prod, nonprod, dev, test, stage, uat
 #   - Instance type: t4g.micro, t4g.small, etc.
 #   - Architecture: arm64 or x86_64
+#
+# Naming Best Practices:
+#   Use descriptive role names that are self-explanatory without additional context.
+#   This makes server identification easier in logs, monitoring, and incident response.
+#
+#   Good examples:
+#     - For Ziti: 'controller', 'router', 'edge-router', 'management'
+#     - For Apps: 'api', 'web', 'frontend', 'backend', 'worker', 'scheduler'
+#     - For Databases: 'primary', 'replica', 'cache', 'queue'
+#     - For Services: 'api-v1', 'api-v2', 'web-app', 'admin-panel'
+#
+#   Avoid ambiguous abbreviations:
+#     - Bad: 'mt' (middle tier - what does it do?), 'svc' (which service?)
+#     - Good: 'controller', 'api-server', 'web-frontend'
+#
+#   The resulting name format is: {name}.{role}.{environment}
+#   Example: ziti.controller.nonprod, app.api-server.prod
 # =============================================================================
 
 set -e
@@ -310,8 +333,8 @@ if load_cache && [ -n "$CACHED_NAME" ]; then
     else
         # User wants to enter new values - clear cache and prompt
         rm -f "$CACHE_FILE"
-        prompt_choice NAME "Name (server purpose)" "app, api, web, database, cache, queue, worker, scheduler" "app"
-        prompt_choice ROLE "Role (identifier)" "api, web, db, cache, queue, worker, scheduler, mt" "api"
+        prompt_choice NAME "Name (server purpose)" "app, api, web, database, cache, queue, worker, scheduler, ziti" "app"
+        prompt ROLE "Role (descriptive identifier, e.g., controller, router, edge-router, api, web, db)" ""
         prompt_choice TIER "Tier (determines subnet: app, db, or ziti)" "app, db, ziti" "app"
         prompt_choice ENV "Environment" "prod, nonprod, dev, test, stage, uat" "nonprod"
         prompt INSTANCE_TYPE "Instance type" "t4g.micro"
@@ -319,8 +342,8 @@ if load_cache && [ -n "$CACHED_NAME" ]; then
     fi
 else
     # No cache - prompt for all values
-    prompt_choice NAME "Name (server purpose)" "app, api, web, database, cache, queue, worker, scheduler" "app"
-    prompt_choice ROLE "Role (identifier)" "api, web, db, cache, queue, worker, scheduler, mt" "api"
+    prompt_choice NAME "Name (server purpose)" "app, api, web, database, cache, queue, worker, scheduler, ziti" "app"
+    prompt ROLE "Role (descriptive identifier, e.g., controller, router, edge-router, api, web, db)" ""
     prompt_choice TIER "Tier (determines subnet: app, db, or ziti)" "app, db, ziti" "app"
     prompt_choice ENV "Environment" "prod, nonprod, dev, test, stage, uat" "nonprod"
     prompt INSTANCE_TYPE "Instance type" "t4g.micro"
@@ -334,6 +357,7 @@ SUBNET="private-${TIER}-${ENV}-az1"
 INTERNAL_DNS="${HYPHEN_NAME}.theraprac-internal.com"
 ZITI_SSH="ssh.${FULL_NAME}.ziti"
 ZITI_IDENTITY_NAME="${FULL_NAME}"
+WORKSPACE_NAME="${FULL_NAME}"  # Use full name as Terraform workspace
 
 echo ""
 echo -e "${BLUE}=== Configuration Summary ===${NC}"
@@ -393,72 +417,120 @@ cd "$TF_DIR"
 echo -e "${YELLOW}Initializing Terraform...${NC}"
 terraform init -reconfigure
 
-# Check if resources exist
+# =============================================================================
+# Terraform Workspace Management
+# =============================================================================
+# Each server gets its own workspace, allowing multiple servers to be managed
+# independently with separate state files.
+# =============================================================================
+
+echo ""
+echo -e "${BLUE}=== Managing Terraform Workspace ===${NC}"
+echo ""
+
+# List existing workspaces
+CURRENT_WORKSPACE=$(terraform workspace show 2>/dev/null || echo "default")
+echo -e "Current workspace: ${CURRENT_WORKSPACE}"
+
+# Check if there's an existing server in default workspace (from old single-state approach)
+if [ "$CURRENT_WORKSPACE" = "default" ]; then
+    set +e
+    terraform state list 2>/dev/null | grep -q "module.basic_server"
+    DEFAULT_HAS_RESOURCES=$?
+    set -e
+    
+    if [ $DEFAULT_HAS_RESOURCES -eq 0 ]; then
+        echo -e "${YELLOW}ℹ Note: Existing server found in 'default' workspace${NC}"
+        echo -e "${YELLOW}  This server will remain in default and won't be affected.${NC}"
+        echo -e "${YELLOW}  New servers will use their own workspaces.${NC}"
+        echo ""
+    fi
+fi
+
+# Check if workspace exists
 set +e
-terraform state list 2>/dev/null | grep -q "module.basic_server"
-RESOURCES_EXIST=$?
+terraform workspace list 2>/dev/null | grep -q "^\s*${WORKSPACE_NAME}\s*$"
+WORKSPACE_EXISTS=$?
 set -e
 
-if [ $RESOURCES_EXIST -eq 0 ]; then
-    echo -e "${YELLOW}⚠ Existing infrastructure detected${NC}"
-    echo ""
+if [ $WORKSPACE_EXISTS -eq 0 ]; then
+    echo -e "${GREEN}✓ Workspace '${WORKSPACE_NAME}' already exists${NC}"
+    echo -e "${YELLOW}Selecting workspace '${WORKSPACE_NAME}'...${NC}"
+    terraform workspace select "${WORKSPACE_NAME}"
     
-    if [ "$NON_INTERACTIVE" = "true" ]; then
-        REPLY="y"
-        echo -e "${BLUE}Destroy existing resources before creating new ones? [y/N]: y (non-interactive)${NC}"
-    else
-        read -p "Destroy existing resources before creating new ones? [y/N] " -n 1 -r
-        echo
-    fi
+    # Check if this workspace has existing resources
+    set +e
+    terraform state list 2>/dev/null | grep -q "module.basic_server"
+    RESOURCES_EXIST=$?
+    set -e
     
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Destroying existing infrastructure...${NC}"
-        if ! terraform destroy \
-            -var="name=$NAME" \
-            -var="role=$ROLE" \
-            -var="tier=$TIER" \
-            -var="environment=$ENV" \
-            -var="instance_type=$INSTANCE_TYPE" \
-            -var="arch=$ARCH" \
-            -var="ssh_key_ansible=$SSH_KEY_ANSIBLE" \
-            -var="ssh_key_jfinlinson=$SSH_KEY_JFINLINSON" \
-            -auto-approve 2>&1 | tee /tmp/terraform-destroy.log; then
-            
-            # Check if error was due to state lock
-            if grep -q "Error acquiring the state lock" /tmp/terraform-destroy.log; then
-                LOCK_ID=$(grep -oP 'ID:\s+\K[^\s]+' /tmp/terraform-destroy.log | head -1)
-                if [ -n "$LOCK_ID" ]; then
-                    echo -e "${YELLOW}State lock detected. Attempting to unlock...${NC}"
-                    if terraform force-unlock -force "$LOCK_ID" 2>/dev/null; then
-                        echo -e "${GREEN}✓ Lock released. Retrying destroy...${NC}"
-                        terraform destroy \
-                            -var="name=$NAME" \
-                            -var="role=$ROLE" \
-                            -var="tier=$TIER" \
-                            -var="environment=$ENV" \
-                            -var="instance_type=$INSTANCE_TYPE" \
-                            -var="arch=$ARCH" \
-                            -var="ssh_key_ansible=$SSH_KEY_ANSIBLE" \
-                            -var="ssh_key_jfinlinson=$SSH_KEY_JFINLINSON" \
-                            -auto-approve
-                    else
-                        echo -e "${RED}Failed to unlock. Please unlock manually:${NC}"
-                        echo "  terraform force-unlock -force $LOCK_ID"
-                        exit 1
-                    fi
-                fi
-            else
-                echo -e "${RED}Destroy failed. Check /tmp/terraform-destroy.log for details.${NC}"
-                exit 1
-            fi
+    if [ $RESOURCES_EXIST -eq 0 ]; then
+        echo -e "${YELLOW}⚠ Existing infrastructure detected in this workspace${NC}"
+        echo ""
+        
+        if [ "$NON_INTERACTIVE" = "true" ]; then
+            REPLY="y"
+            echo -e "${BLUE}Destroy existing resources before creating new ones? [y/N]: y (non-interactive)${NC}"
+        else
+            read -p "Destroy existing resources before creating new ones? [y/N] " -n 1 -r
+            echo
         fi
-        echo -e "${GREEN}✓ Existing infrastructure destroyed${NC}"
+        
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}Destroying existing infrastructure...${NC}"
+            if ! terraform destroy \
+                -var="name=$NAME" \
+                -var="role=$ROLE" \
+                -var="tier=$TIER" \
+                -var="environment=$ENV" \
+                -var="instance_type=$INSTANCE_TYPE" \
+                -var="arch=$ARCH" \
+                -var="ssh_key_ansible=$SSH_KEY_ANSIBLE" \
+                -var="ssh_key_jfinlinson=$SSH_KEY_JFINLINSON" \
+                -auto-approve 2>&1 | tee /tmp/terraform-destroy.log; then
+                
+                # Check if error was due to state lock
+                if grep -q "Error acquiring the state lock" /tmp/terraform-destroy.log; then
+                    LOCK_ID=$(grep -oP 'ID:\s+\K[^\s]+' /tmp/terraform-destroy.log | head -1)
+                    if [ -n "$LOCK_ID" ]; then
+                        echo -e "${YELLOW}State lock detected. Attempting to unlock...${NC}"
+                        if terraform force-unlock -force "$LOCK_ID" 2>/dev/null; then
+                            echo -e "${GREEN}✓ Lock released. Retrying destroy...${NC}"
+                            terraform destroy \
+                                -var="name=$NAME" \
+                                -var="role=$ROLE" \
+                                -var="tier=$TIER" \
+                                -var="environment=$ENV" \
+                                -var="instance_type=$INSTANCE_TYPE" \
+                                -var="arch=$ARCH" \
+                                -var="ssh_key_ansible=$SSH_KEY_ANSIBLE" \
+                                -var="ssh_key_jfinlinson=$SSH_KEY_JFINLINSON" \
+                                -auto-approve
+                        else
+                            echo -e "${RED}Failed to unlock. Please unlock manually:${NC}"
+                            echo "  terraform force-unlock -force $LOCK_ID"
+                            exit 1
+                        fi
+                    fi
+                else
+                    echo -e "${RED}Destroy failed. Check /tmp/terraform-destroy.log for details.${NC}"
+                    exit 1
+                fi
+            fi
+            echo -e "${GREEN}✓ Existing infrastructure destroyed${NC}"
+        else
+            echo -e "${YELLOW}Skipping destroy - will attempt to update in place${NC}"
+        fi
     else
-        echo -e "${YELLOW}Skipping destroy - will attempt to update in place${NC}"
+        echo -e "${GREEN}✓ Workspace exists but has no resources (fresh workspace)${NC}"
     fi
 else
-    echo -e "${GREEN}✓ No existing infrastructure found${NC}"
+    echo -e "${BLUE}Creating new workspace '${WORKSPACE_NAME}'...${NC}"
+    terraform workspace new "${WORKSPACE_NAME}"
+    echo -e "${GREEN}✓ Workspace created${NC}"
 fi
+
+echo -e "${GREEN}✓ Using workspace: ${WORKSPACE_NAME}${NC}"
 
 # =============================================================================
 # Terraform - Create New Resources

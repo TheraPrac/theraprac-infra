@@ -85,9 +85,8 @@ echo ""
 print_header "Deployment Configuration"
 
 # Try to load cached values
-if load_cache "$CACHE_FILE" && [ -n "$CACHED_TARGET_ENV" ]; then
+if load_cache "$CACHE_FILE" && [ -n "$CACHED_SERVER_NAME" ]; then
     echo -e "${GREEN}Found cached values from last run:${NC}"
-    echo "  Environment:  $CACHED_TARGET_ENV"
     echo "  Version:      $CACHED_VERSION"
     echo "  Server Name:  $CACHED_SERVER_NAME"
     echo "  S3 Bucket:    $CACHED_S3_BUCKET"
@@ -102,7 +101,6 @@ if load_cache "$CACHE_FILE" && [ -n "$CACHED_TARGET_ENV" ]; then
     fi
     
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        TARGET_ENV="$CACHED_TARGET_ENV"
         VERSION="$CACHED_VERSION"
         SERVER_NAME="$CACHED_SERVER_NAME"
         S3_BUCKET="$CACHED_S3_BUCKET"
@@ -110,30 +108,41 @@ if load_cache "$CACHE_FILE" && [ -n "$CACHED_TARGET_ENV" ]; then
     else
         # Clear cache and prompt for new values
         rm -f "$CACHE_FILE"
-        CACHED_TARGET_ENV=""
+        CACHED_SERVER_NAME=""
     fi
 fi
 
 # Prompt for values if not loaded from cache
-if [ -z "$TARGET_ENV" ]; then
-    prompt_choice TARGET_ENV "Target environment" "dev, test, prod" "dev"
+if [ -z "$SERVER_NAME" ]; then
     prompt VERSION "API version to deploy" "latest"
-    prompt SERVER_NAME "Server name (e.g., app.mt, theraprac.mt)" ""
+    prompt SERVER_NAME "Server name (e.g., app.mt.dev, theraprac.mt.prod)" ""
     prompt S3_BUCKET "S3 artifact bucket" "theraprac-artifacts"
 fi
 
-# Derive values
-SERVER_HOST="ssh.${SERVER_NAME}.${TARGET_ENV}.ziti"
-# Convert dots to dashes for Ansible inventory host name: app.mt -> app-mt
+# Extract environment from the last segment of server name
+# e.g., app.mt.dev -> dev, theraprac.mt.prod -> prod
+TARGET_ENV="${SERVER_NAME##*.}"
+
+# Validate extracted environment
+if [[ ! "$TARGET_ENV" =~ ^(dev|test|prod|nonprod)$ ]]; then
+    echo -e "${RED}Error: Invalid environment '${TARGET_ENV}' in server name${NC}"
+    echo "Server name must end with: dev, test, prod, or nonprod"
+    echo "Example: app.mt.dev, theraprac.mt.prod"
+    exit 1
+fi
+
+# Derive values - server name already includes environment
+SERVER_HOST="ssh.${SERVER_NAME}.ziti"
+# Convert dots to dashes for Ansible inventory host name: app.mt.dev -> app-mt-dev
 SERVER_NAME_DASHED="${SERVER_NAME//./-}"
-ANSIBLE_HOST="${SERVER_NAME_DASHED}-${TARGET_ENV}"
+ANSIBLE_HOST="${SERVER_NAME_DASHED}"
 API_DOMAIN="api-${TARGET_ENV}.theraprac.com"
 
 echo ""
 print_header "Configuration Summary"
-echo -e "  Environment:   ${GREEN}${TARGET_ENV}${NC}"
-echo -e "  Version:       ${GREEN}${VERSION}${NC}"
 echo -e "  Server Name:   ${SERVER_NAME}"
+echo -e "  Environment:   ${GREEN}${TARGET_ENV}${NC} (extracted from server name)"
+echo -e "  Version:       ${GREEN}${VERSION}${NC}"
 echo -e "  Server Host:   ${GREEN}${SERVER_HOST}${NC}"
 echo -e "  S3 Bucket:     ${S3_BUCKET}"
 echo -e "  AWS Account:   ${AWS_ACCOUNT_ID}"
@@ -147,7 +156,7 @@ if ! confirm "Continue with this configuration?"; then
 fi
 
 # Save to cache
-save_cache "$CACHE_FILE" TARGET_ENV VERSION SERVER_NAME S3_BUCKET
+save_cache "$CACHE_FILE" VERSION SERVER_NAME S3_BUCKET
 
 # =============================================================================
 # Step 1: Check Terraform IAM
@@ -157,42 +166,54 @@ print_header "Step 1: Checking Terraform IAM (KMS + SSM permissions)"
 
 cd "$TF_IAM_DIR"
 
-# Refresh credentials before Terraform
-refresh_aws_credentials || true
+# Refresh credentials before Terraform (explicitly use admin profile for IAM access)
+eval $(aws configure export-credentials --profile "${AWS_PROFILE:-jfinlinson_admin}" --format env 2>/dev/null) || {
+    echo -e "${RED}Failed to export AWS credentials${NC}"
+    exit 1
+}
 
-# Initialize Terraform
-if [ ! -d ".terraform" ]; then
-    echo -e "${YELLOW}Initializing Terraform...${NC}"
+# Initialize Terraform (always reconfigure to pick up fresh credentials)
+echo -e "${YELLOW}Initializing Terraform...${NC}"
+if ! terraform init -reconfigure >/dev/null 2>&1; then
+    echo -e "${RED}Terraform init failed. Retrying with verbose output...${NC}"
     terraform init -reconfigure
+    exit 1
 fi
 
-# Check for changes
+# Check for changes (use admin profile for IAM access)
+TF_PROFILE="${AWS_PROFILE:-jfinlinson_admin}"
+TF_PLAN_FILE="/tmp/deploy-api-iam.tfplan"
 echo -e "${YELLOW}Checking for pending Terraform changes...${NC}"
 set +e
-terraform plan -detailed-exitcode >/dev/null 2>&1
+terraform plan -detailed-exitcode -var="aws_profile=${TF_PROFILE}" -out="$TF_PLAN_FILE" >/dev/null 2>&1
 TF_EXIT_CODE=$?
 set -e
 
 case $TF_EXIT_CODE in
     0)
         echo -e "${GREEN}✓ Terraform IAM is up to date${NC}"
+        rm -f "$TF_PLAN_FILE"
         ;;
     2)
         echo -e "${YELLOW}Terraform IAM has pending changes${NC}"
         echo ""
-        terraform plan
+        terraform show "$TF_PLAN_FILE"
         echo ""
         if confirm "Apply these Terraform changes?"; then
             echo -e "${YELLOW}Applying Terraform changes...${NC}"
-            terraform apply -auto-approve
+            terraform apply "$TF_PLAN_FILE"
             echo -e "${GREEN}✓ Terraform apply complete${NC}"
         else
             echo -e "${YELLOW}Skipping Terraform apply. Continuing...${NC}"
         fi
+        rm -f "$TF_PLAN_FILE"
         ;;
     *)
-        echo -e "${RED}Error checking Terraform state${NC}"
+        echo -e "${RED}Error checking Terraform state (exit code: $TF_EXIT_CODE)${NC}"
+        terraform plan -var="aws_profile=${TF_PROFILE}"
+        echo ""
         echo "You may need to run: cd $TF_IAM_DIR && terraform init"
+        rm -f "$TF_PLAN_FILE"
         exit 1
         ;;
 esac

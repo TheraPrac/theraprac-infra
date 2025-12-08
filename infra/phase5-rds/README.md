@@ -1,44 +1,101 @@
 # Phase 5: RDS PostgreSQL
 
-Creates RDS PostgreSQL instances for application databases.
+Creates RDS PostgreSQL instances for application databases with Ziti overlay access.
 
 ## Status
 
-📋 **Planned**
+✅ **Implemented**
 
 ## Depends On
 
-- Phase 1 (VPC)
-- Phase 3 (IAM)
+- Phase 1 (VPC) - For db subnets
+- Phase 3 (IAM) - For KMS encryption key access
+- Phase 4 (Ziti) - For internal DNS zone
+- Phase 7 (Basic Server) - For edge-router security group
 
-## Planned Resources
+## Prerequisites
 
-### Non-Prod Database
+Before applying, ensure these AWS resources exist:
+- SSM Parameter: `/theraprac/api/{environment}/db-admin-user`
+- Secrets Manager: `theraprac/api/{environment}/secrets` with `DB_ADMIN_PASSWORD` key
 
-- RDS PostgreSQL instance (db.t3.micro or small)
-- Multi-AZ: No (cost savings for non-prod)
-- Subnet group using non-prod DB subnets
-- Security group for app server access
+## Resources Created
 
-### Prod Database
+### RDS PostgreSQL Instance
 
-- RDS PostgreSQL instance (appropriately sized)
-- Multi-AZ: Yes (high availability)
-- Subnet group using prod DB subnets
-- Security group for prod app server access
-- Automated backups with retention
-- Performance Insights enabled
+- Instance identifier: `db-{environment}-app`
+- Engine: PostgreSQL 16.x
+- Instance class: `db.t4g.micro` (configurable)
+- Storage: 20GB gp3, encrypted at rest
+- Multi-AZ: No for non-prod, Yes for prod
+- Backup retention: 1 day (non-prod), 7 days (prod)
+- TLS/SSL: Required via parameter group
 
-### Shared Resources
+### DB Subnet Group
 
-- DB subnet groups
-- Parameter groups
-- Option groups (if needed)
+- Uses db subnets from Phase 1 (az1, az2, az3)
+- Non-prod uses `private-db-nonprod-*` subnets
+- Prod uses `private-db-prod-*` subnets
+
+### Security Group
+
+- Allows port 5432 only from edge-router security group
+- No egress rules (RDS doesn't initiate connections)
+
+### Parameter Group
+
+- PostgreSQL 16 family
+- `rds.force_ssl = 1` (TLS required)
 
 ## Security
 
 - No public accessibility
-- Encrypted at rest (KMS)
-- Encrypted in transit (SSL)
-- Credentials stored in Secrets Manager
+- Encrypted at rest (AWS managed key)
+- Encrypted in transit (TLS required)
+- Credentials sourced from SSM/Secrets Manager
+- Access only via Ziti overlay network
+
+## Usage
+
+```bash
+# Initialize
+terraform init
+
+# Plan for dev environment (edge-router is in nonprod)
+terraform plan \
+  -var="environment=dev" \
+  -var="edge_router_environment=nonprod" \
+  -out=tfplan
+
+# Apply
+terraform apply tfplan
+```
+
+**Important:** The `edge_router_environment` specifies which environment's edge-router
+hosts the database service. For dev/test/stage databases, this is typically `nonprod`.
+For prod databases, use `prod`.
+
+## Outputs
+
+| Output | Description |
+|--------|-------------|
+| `db_endpoint` | RDS endpoint (hostname:port) |
+| `db_address` | RDS hostname |
+| `ziti_service_name` | Suggested Ziti service name |
+| `ziti_host_config` | Host config JSON for Ziti |
+| `ziti_intercept_config` | Intercept config JSON for Ziti |
+
+## Ziti Service Configuration
+
+After applying Terraform, create the Ziti service using the outputs:
+
+```bash
+# Get outputs
+terraform output -json
+
+# Use the ziti_host_config and ziti_intercept_config outputs
+# to create the Ziti service via Ansible or CLI
+```
+
+See `ansible/ziti-db-service/` for automated Ziti configuration.
 
