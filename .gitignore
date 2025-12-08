@@ -76,3 +76,6 @@ id_ed25519
 .provision-basic-server-cache
 .add-https-cache
 .deploy-api-cache
+.preflight-deploy-api-cache
+.preflight-deploy-api-cache
+.deploy-api-cache

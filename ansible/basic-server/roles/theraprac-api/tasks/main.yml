@@ -64,32 +64,50 @@
 # Tarball Deployment
 # =============================================================================
 
-- name: Set tarball paths for latest
+- name: Detect version type
+  set_fact:
+    is_latest: "{{ version == 'latest' }}"
+    is_branch_build: "{{ '/' in version }}"
+    is_release: "{{ version != 'latest' and '/' not in version }}"
+
+- name: Set tarball paths for main/latest
   set_fact:
     s3_tarball_path: "builds/main/latest/theraprac-api-{{ version }}-linux-arm64.tar.gz"
     s3_tarball_checksum_path: "builds/main/latest/theraprac-api-{{ version }}-linux-arm64.tar.gz.sha256"
-  when: version == 'latest'
+  when: is_latest | bool
 
-- name: Set tarball paths for specific version
+- name: Set tarball paths for branch builds
+  set_fact:
+    s3_tarball_path: "builds/{{ version }}/theraprac-api-0.1.0-linux-arm64.tar.gz"
+    s3_tarball_checksum_path: "builds/{{ version }}/theraprac-api-0.1.0-linux-arm64.tar.gz.sha256"
+  when: is_branch_build | bool
+
+- name: Set tarball paths for releases
   set_fact:
     s3_tarball_path: "releases/v{{ version }}/theraprac-api-{{ version }}-linux-arm64.tar.gz"
     s3_tarball_checksum_path: "releases/v{{ version }}/theraprac-api-{{ version }}-linux-arm64.tar.gz.sha256"
-  when: version != 'latest'
+  when: is_release | bool
 
-- name: Get version from manifest for latest builds
-  when: version == 'latest'
+- name: Get version from manifest for main/latest builds
+  when: is_latest | bool
   block:
     - name: Download manifest from S3
-      amazon.aws.aws_s3:
-        bucket: "{{ s3_bucket }}"
-        object: "builds/main/latest/manifest.json"
-        dest: "/tmp/theraprac-manifest.json"
-        mode: get
+      command: >
+        aws s3 cp
+        s3://{{ s3_bucket }}/builds/main/latest/manifest.json
+        /tmp/theraprac-manifest-{{ ansible_hostname }}.json
+        --profile jfinlinson_admin
+        --region {{ aws_region }}
+      delegate_to: localhost
+      become: false
+      changed_when: false
 
     - name: Read manifest
       slurp:
-        src: "/tmp/theraprac-manifest.json"
+        src: "/tmp/theraprac-manifest-{{ ansible_hostname }}.json"
       register: manifest_file
+      delegate_to: localhost
+      become: false
 
     - name: Set actual version from manifest
       set_fact:
@@ -100,36 +118,81 @@
         s3_tarball_path: "builds/main/latest/theraprac-api-{{ actual_version }}-linux-arm64.tar.gz"
         s3_tarball_checksum_path: "builds/main/latest/theraprac-api-{{ actual_version }}-linux-arm64.tar.gz.sha256"
 
-- name: Set actual version for specific version
+- name: Get version from manifest for branch builds
+  when: is_branch_build | bool
+  block:
+    - name: Download manifest from S3
+      command: >
+        aws s3 cp
+        s3://{{ s3_bucket }}/builds/{{ version }}/manifest.json
+        /tmp/theraprac-manifest-{{ ansible_hostname }}.json
+        --profile jfinlinson_admin
+        --region {{ aws_region }}
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Read manifest
+      slurp:
+        src: "/tmp/theraprac-manifest-{{ ansible_hostname }}.json"
+      register: manifest_file
+      delegate_to: localhost
+      become: false
+
+    - name: Set actual version from manifest
+      set_fact:
+        actual_version: "{{ (manifest_file.content | b64decode | from_json).version }}"
+
+    - name: Update tarball paths with actual version
+      set_fact:
+        s3_tarball_path: "builds/{{ version }}/theraprac-api-{{ actual_version }}-linux-arm64.tar.gz"
+        s3_tarball_checksum_path: "builds/{{ version }}/theraprac-api-{{ actual_version }}-linux-arm64.tar.gz.sha256"
+
+- name: Set actual version for releases
   set_fact:
     actual_version: "{{ version }}"
-  when: version != 'latest'
+  when: is_release | bool
 
 - name: Download tarball checksum from S3
-  amazon.aws.aws_s3:
-    bucket: "{{ s3_bucket }}"
-    object: "{{ s3_tarball_checksum_path }}"
-    dest: "/tmp/theraprac-api.tar.gz.sha256"
-    mode: get
+  command: >
+    aws s3 cp
+    s3://{{ s3_bucket }}/{{ s3_tarball_checksum_path }}
+    /tmp/theraprac-api-{{ ansible_hostname }}.tar.gz.sha256
+    --profile jfinlinson_admin
+    --region {{ aws_region }}
+  delegate_to: localhost
+  become: false
+  changed_when: false
 
 - name: Read tarball checksum
   slurp:
-    src: "/tmp/theraprac-api.tar.gz.sha256"
+    src: "/tmp/theraprac-api-{{ ansible_hostname }}.tar.gz.sha256"
   register: tarball_checksum_file
+  delegate_to: localhost
+  become: false
 
 - name: Set expected tarball checksum
   set_fact:
     expected_tarball_checksum: "{{ (tarball_checksum_file.content | b64decode).split()[0] }}"
 
-- name: Download tarball from S3
-  amazon.aws.aws_s3:
-    bucket: "{{ s3_bucket }}"
-    object: "{{ s3_tarball_path }}"
-    dest: "/tmp/theraprac-api.tar.gz"
-    mode: get
+- name: Download tarball from S3 to localhost
+  command: >
+    aws s3 cp
+    s3://{{ s3_bucket }}/{{ s3_tarball_path }}
+    /tmp/theraprac-api-{{ ansible_hostname }}.tar.gz
+    --profile jfinlinson_admin
+    --region {{ aws_region }}
   register: tarball_download
+  delegate_to: localhost
+  become: false
 
-- name: Verify tarball checksum
+- name: Copy tarball from localhost to remote server
+  copy:
+    src: "/tmp/theraprac-api-{{ ansible_hostname }}.tar.gz"
+    dest: "/tmp/theraprac-api.tar.gz"
+    mode: '0644'
+
+- name: Verify tarball checksum on remote server
   stat:
     path: "/tmp/theraprac-api.tar.gz"
     checksum_algorithm: sha256
@@ -147,6 +210,18 @@
     src: /tmp/theraprac-api.tar.gz
     dest: /tmp/theraprac-staging
     remote_src: yes
+    extra_opts: [--strip-components=1]
+
+- name: Clean up temporary files on localhost
+  file:
+    path: "{{ item }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  loop:
+    - "/tmp/theraprac-api-{{ ansible_hostname }}.tar.gz"
+    - "/tmp/theraprac-api-{{ ansible_hostname }}.tar.gz.sha256"
+    - "/tmp/theraprac-manifest-{{ ansible_hostname }}.json"
 
 - name: Copy binary from staging
   copy:
@@ -198,70 +273,116 @@
   when: run_migrations | bool
   block:
     - name: Get database host from SSM
-      amazon.aws.ssm_parameter:
-        name: "{{ ssm_db_host_param }}"
-        region: "{{ aws_region }}"
+      ansible.builtin.command:
+        cmd: >
+          aws ssm get-parameter
+          --name {{ ssm_db_host_param }}
+          --query 'Parameter.Value'
+          --output text
+          --region {{ aws_region }}
       register: ssm_db_host
+      changed_when: false
 
     - name: Get database port from SSM
-      amazon.aws.ssm_parameter:
-        name: "{{ ssm_db_port_param }}"
-        region: "{{ aws_region }}"
+      ansible.builtin.command:
+        cmd: >
+          aws ssm get-parameter
+          --name {{ ssm_db_port_param }}
+          --query 'Parameter.Value'
+          --output text
+          --region {{ aws_region }}
       register: ssm_db_port
+      changed_when: false
 
     - name: Get database name from SSM
-      amazon.aws.ssm_parameter:
-        name: "{{ ssm_db_name_param }}"
-        region: "{{ aws_region }}"
+      ansible.builtin.command:
+        cmd: >
+          aws ssm get-parameter
+          --name {{ ssm_db_name_param }}
+          --query 'Parameter.Value'
+          --output text
+          --region {{ aws_region }}
       register: ssm_db_name
+      changed_when: false
 
     - name: Get database admin user from SSM
-      amazon.aws.ssm_parameter:
-        name: "{{ ssm_db_admin_user_param }}"
-        region: "{{ aws_region }}"
+      ansible.builtin.command:
+        cmd: >
+          aws ssm get-parameter
+          --name {{ ssm_db_admin_user_param }}
+          --query 'Parameter.Value'
+          --output text
+          --region {{ aws_region }}
       register: ssm_db_admin_user
+      changed_when: false
 
     - name: Get database app user from SSM
-      amazon.aws.ssm_parameter:
-        name: "{{ ssm_db_user_param }}"
-        region: "{{ aws_region }}"
+      ansible.builtin.command:
+        cmd: >
+          aws ssm get-parameter
+          --name {{ ssm_db_user_param }}
+          --query 'Parameter.Value'
+          --output text
+          --region {{ aws_region }}
       register: ssm_db_user
+      changed_when: false
+
+    - name: Get database SSL mode from SSM
+      ansible.builtin.command:
+        cmd: >
+          aws ssm get-parameter
+          --name /theraprac/api/{{ target_env }}/db-ssl-mode
+          --query 'Parameter.Value'
+          --output text
+          --region {{ aws_region }}
+      register: ssm_db_ssl_mode
+      changed_when: false
 
     - name: Get secrets from Secrets Manager
-      amazon.aws.secretsmanager_secret:
-        name: "{{ secrets_manager_secret }}"
-        region: "{{ aws_region }}"
+      ansible.builtin.command:
+        cmd: >
+          aws secretsmanager get-secret-value
+          --secret-id {{ secrets_manager_secret }}
+          --query 'SecretString'
+          --output text
+          --region {{ aws_region }}
       register: secrets_result
+      no_log: true
+      changed_when: false
 
     - name: Parse secrets JSON
       set_fact:
-        db_secrets: "{{ secrets_result.secret | from_json }}"
+        db_secrets: "{{ secrets_result.stdout | from_json }}"
 
     - name: Display migration info
       debug:
         msg: |
           Running database migrations
           ============================
-          Host: {{ ssm_db_host.parameter.value }}
-          Port: {{ ssm_db_port.parameter.value }}
-          Database: {{ ssm_db_name.parameter.value }}
-          Admin User: {{ ssm_db_admin_user.parameter.value }}
-          Changelog: {{ theraprac_db_dir }}/{{ db_changelog_file }}
+          Host: {{ ssm_db_host.stdout }}
+          Port: {{ ssm_db_port.stdout }}
+          Database: {{ ssm_db_name.stdout }}
+          Admin User: {{ ssm_db_admin_user.stdout }}
+          SSL Mode: {{ ssm_db_ssl_mode.stdout }}
 
     - name: Run Liquibase migrations
       command: >
         {{ liquibase_bin }}
-        --changeLogFile={{ theraprac_db_dir }}/{{ db_changelog_file }}
-        --url=jdbc:postgresql://{{ ssm_db_host.parameter.value }}:{{ ssm_db_port.parameter.value }}/{{ ssm_db_name.parameter.value }}?sslmode=require
-        --username={{ ssm_db_admin_user.parameter.value }}
+        --changeLogFile=db.changelog-master.xml
+        --url=jdbc:postgresql://{{ ssm_db_host.stdout }}:{{ ssm_db_port.stdout }}/{{ ssm_db_name.stdout }}?sslmode={{ ssm_db_ssl_mode.stdout }}
+        --username={{ ssm_db_admin_user.stdout }}
         --password={{ db_secrets.DB_ADMIN_PASSWORD }}
         --liquibaseSchemaName=public
-        --changelog-parameters.DB_USER={{ ssm_db_user.parameter.value }}
-        --changelog-parameters.DB_PASSWORD={{ db_secrets.DB_PASSWORD }}
         update
+      args:
+        chdir: "{{ theraprac_db_dir }}/changelog"
       register: liquibase_result
       changed_when: "'successfully' in liquibase_result.stdout or 'ChangeSet' in liquibase_result.stdout"
-      no_log: true  # Hide passwords from logs
+      no_log: true
+      environment:
+        JAVA_HOME: /usr/lib/jvm/java-17-amazon-corretto
+        DB_USER: "{{ ssm_db_user.stdout }}"
+        DB_PASSWORD: "{{ db_secrets.DB_PASSWORD }}"
 
     - name: Display migration result
       debug:
@@ -301,7 +422,7 @@
 
 - name: Wait for service to be healthy
   uri:
-    url: "http://localhost:8080/healthz"
+    url: "http://localhost:8080/health"
     method: GET
     status_code: 200
   register: health_check

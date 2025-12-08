@@ -341,6 +341,30 @@ data "aws_iam_policy_document" "api_ssm" {
       "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/theraprac/api/*"
     ]
   }
+
+  # ListTagsForResource is needed by Ansible modules to retrieve parameter tags
+  statement {
+    sid    = "SSMParameterStoreListTags"
+    effect = "Allow"
+    actions = [
+      "ssm:ListTagsForResource",
+    ]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/theraprac/api/*"
+    ]
+  }
+
+  # DescribeParameters is needed by Ansible modules to check parameter existence
+  # This is a list operation, so it requires * resource, but actual parameter
+  # access is still restricted by the GetParameter permissions above
+  statement {
+    sid    = "SSMParameterStoreDescribe"
+    effect = "Allow"
+    actions = [
+      "ssm:DescribeParameters",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_policy" "api_ssm" {

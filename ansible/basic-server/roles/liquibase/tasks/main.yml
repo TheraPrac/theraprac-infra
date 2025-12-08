@@ -5,11 +5,39 @@
 # Installs Liquibase and PostgreSQL JDBC driver for database migrations.
 #
 # This role:
-#   1. Downloads Liquibase from GitHub releases
-#   2. Extracts to /opt/liquibase
-#   3. Downloads PostgreSQL JDBC driver
-#   4. Creates symlink at /usr/local/bin/liquibase
+#   1. Installs Java (OpenJDK) - required by Liquibase
+#   2. Downloads Liquibase from GitHub releases
+#   3. Extracts to /opt/liquibase
+#   4. Downloads PostgreSQL JDBC driver
+#   5. Creates symlink at /usr/local/bin/liquibase
 # =============================================================================
+
+# =============================================================================
+# Install Java (Prerequisite)
+# =============================================================================
+
+- name: Check if Java is installed
+  command: which java
+  register: java_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Java (OpenJDK 17)
+  ansible.builtin.dnf:
+    name: java-17-amazon-corretto-headless
+    state: present
+  when: java_check.rc != 0
+
+- name: Verify Java installation
+  command: java -version
+  register: java_version
+  changed_when: false
+  failed_when: false
+
+- name: Display Java version
+  debug:
+    msg: "Java installed: {{ java_version.stderr_lines[0] | default('unknown') }}"
+  when: java_version.rc == 0
 
 - name: Check if Liquibase is already installed
   stat:
@@ -22,6 +50,8 @@
   changed_when: false
   failed_when: false
   when: liquibase_installed.stat.exists
+  environment:
+    JAVA_HOME: /usr/lib/jvm/java-17-amazon-corretto
 
 - name: Set Liquibase needs install flag
   set_fact:
@@ -84,6 +114,8 @@
   command: "{{ liquibase_bin }} --version"
   register: liquibase_verify
   changed_when: false
+  environment:
+    JAVA_HOME: /usr/lib/jvm/java-17-amazon-corretto
 
 - name: Display Liquibase version
   debug:

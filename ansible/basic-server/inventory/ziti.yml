@@ -23,4 +23,18 @@ all:
       ansible_ssh_private_key_file: ~/.ssh/id_ed25519_ansible_1
       ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
 
+    app-mt-dev:
+      ansible_host: ssh.app.mt.dev.ziti
+      ansible_port: 22
+      ansible_user: ansible
+      ansible_connection: ssh
+      ansible_ssh_private_key_file: ~/.ssh/id_ed25519_ansible_1
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+
+  children:
+    app_servers:
+      hosts:
+        app-mt-dev:
+        theraprac-mt-nonprod:
+
 

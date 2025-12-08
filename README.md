@@ -45,7 +45,23 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-### 3. Ansible Deployment
+### 3. API Deployment
+
+See the [Deployment Workflow Guide](./docs/DEPLOYMENT_WORKFLOW.md) for complete details on deploying the API.
+
+**Quick Start**:
+```bash
+# List available builds
+./scripts/list-builds.sh
+
+# Pre-flight check (recommended)
+./scripts/preflight-deploy-api.sh dev app.mt.dev latest
+
+# Deploy
+./scripts/deploy-api.sh
+```
+
+### 4. Ansible Deployment
 
 ```bash
 cd ansible/ziti-nonprod
@@ -136,6 +152,18 @@ curl -I https://ziti-nonprod.theraprac.com/
 # Test Ziti API (after Ansible deployment)
 curl -sk https://ziti-nonprod.theraprac.com/edge/client/v1/version
 ```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Deployment Workflow](./docs/DEPLOYMENT_WORKFLOW.md) | **Complete guide to deploying the API** - How all scripts work together |
+| [Branch Build Deployment](./docs/BRANCH_BUILD_DEPLOYMENT.md) | Deploying from branch builds (not just releases) |
+| [Build Retention Strategy](./docs/BUILD_RETENTION_STRATEGY.md) | How builds are retained and cleaned up |
+| [Ziti Resource Management](./docs/ZITI_RESOURCE_MANAGEMENT.md) | Managing Ziti identities, services, and policies |
+| [Ziti Roles and Policies](./docs/ZITI_ROLES_AND_POLICIES.md) | Ziti access control and role definitions |
+| [Ziti Cleanup Guide](./docs/ZITI_CLEANUP.md) | Cleaning up Ziti resources before destroying servers |
+| [Ziti Manual Setup](./docs/ZITI_MANUAL_SETUP.md) | Manual Ziti setup procedures (for reference) |
 
 ## Ziti Resource Management
 

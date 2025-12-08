@@ -86,35 +86,37 @@ print_header "Deployment Configuration"
 
 # Try to load cached values
 if load_cache "$CACHE_FILE" && [ -n "$CACHED_SERVER_NAME" ]; then
-    echo -e "${GREEN}Found cached values from last run:${NC}"
-    echo "  Version:      $CACHED_VERSION"
-    echo "  Server Name:  $CACHED_SERVER_NAME"
-    echo "  S3 Bucket:    $CACHED_S3_BUCKET"
-    echo ""
-    
     if [ "$NON_INTERACTIVE" = "true" ]; then
-        REPLY="Y"
-        echo -e "${BLUE}Use cached values? [Y/n]: Y (non-interactive)${NC}"
-    else
-        read -p "Use cached values? [Y/n] " -n 1 -r
-        echo
-    fi
-    
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        # Non-interactive mode: use cached values directly, no prompt
         VERSION="$CACHED_VERSION"
         SERVER_NAME="$CACHED_SERVER_NAME"
         S3_BUCKET="$CACHED_S3_BUCKET"
-        echo -e "${GREEN}Using cached values${NC}"
     else
-        # Clear cache and prompt for new values
-        rm -f "$CACHE_FILE"
-        CACHED_SERVER_NAME=""
+        # Interactive mode: show cached values and prompt
+        echo -e "${GREEN}Found cached values from last run:${NC}"
+        echo "  Version:      $CACHED_VERSION"
+        echo "  Server Name:  $CACHED_SERVER_NAME"
+        echo "  S3 Bucket:    $CACHED_S3_BUCKET"
+        echo ""
+        read -p "Use cached values? [Y/n] " -n 1 -r
+        echo
+        
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            VERSION="$CACHED_VERSION"
+            SERVER_NAME="$CACHED_SERVER_NAME"
+            S3_BUCKET="$CACHED_S3_BUCKET"
+            echo -e "${GREEN}Using cached values${NC}"
+        else
+            # Clear cache and prompt for new values
+            rm -f "$CACHE_FILE"
+            CACHED_SERVER_NAME=""
+        fi
     fi
 fi
 
 # Prompt for values if not loaded from cache
 if [ -z "$SERVER_NAME" ]; then
-    prompt VERSION "API version to deploy" "latest"
+    prompt VERSION "API version to deploy (latest, 0.1.0, or branch/commit like fix/remaining-lint-errors/74dc437)" "latest"
     prompt SERVER_NAME "Server name (e.g., app.mt.dev, theraprac.mt.prod)" ""
     prompt S3_BUCKET "S3 artifact bucket" "theraprac-artifacts"
 fi
