@@ -13,6 +13,7 @@ theraprac_bin_dir: "{{ theraprac_home }}/bin"
 theraprac_etc_dir: "{{ theraprac_home }}/etc"
 theraprac_log_dir: /var/log/theraprac
 theraprac_data_dir: "{{ theraprac_home }}/data"
+theraprac_db_dir: "{{ theraprac_home }}/db"
 
 # AWS Configuration
 aws_region: us-west-2
@@ -31,4 +32,17 @@ binary_name: theraprac-api
 
 # Environment file permissions
 env_file_mode: "0600"
+
+# Database migrations
+run_migrations: true
+liquibase_bin: /usr/local/bin/liquibase
+db_changelog_file: db/changelog/db.changelog-master.xml
+
+# SSM/Secrets paths for database credentials
+ssm_db_host_param: "/theraprac/api/{{ target_env }}/db-host"
+ssm_db_port_param: "/theraprac/api/{{ target_env }}/db-port"
+ssm_db_name_param: "/theraprac/api/{{ target_env }}/db-name"
+ssm_db_admin_user_param: "/theraprac/api/{{ target_env }}/db-admin-user"
+ssm_db_user_param: "/theraprac/api/{{ target_env }}/db-user"
+secrets_manager_secret: "theraprac/api/{{ target_env }}/secrets"
 

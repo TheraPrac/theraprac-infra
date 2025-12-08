@@ -276,6 +276,31 @@ else
 fi
 
 # =============================================================================
+# Step 2.5: Update Database Host Parameter
+# =============================================================================
+
+print_header "Step 2.5: Updating Database Host Parameter"
+
+SSM_DB_HOST="/theraprac/api/${TARGET_ENV}/db-host"
+ZITI_DB_HOST="postgres.db.${TARGET_ENV}.app.ziti"
+
+echo -e "${YELLOW}Setting ${SSM_DB_HOST} = ${ZITI_DB_HOST}${NC}"
+
+if aws ssm put-parameter \
+    --name "$SSM_DB_HOST" \
+    --value "$ZITI_DB_HOST" \
+    --type "String" \
+    --overwrite \
+    --region "${AWS_REGION:-us-west-2}" >/dev/null 2>&1; then
+    echo -e "${GREEN}✓ Database host parameter updated${NC}"
+else
+    echo -e "${RED}Failed to update database host parameter${NC}"
+    echo "You may need to create it manually:"
+    echo "  aws ssm put-parameter --name '$SSM_DB_HOST' --value '$ZITI_DB_HOST' --type String"
+    exit 1
+fi
+
+# =============================================================================
 # Step 3: Run Ansible Playbook
 # =============================================================================
 

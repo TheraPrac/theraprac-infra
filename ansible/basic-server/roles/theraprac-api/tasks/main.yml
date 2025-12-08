@@ -50,6 +50,7 @@
     - "{{ theraprac_bin_dir }}"
     - "{{ theraprac_etc_dir }}"
     - "{{ theraprac_data_dir }}"
+    - "{{ theraprac_db_dir }}"
 
 - name: Create log directory
   file:
@@ -60,60 +61,212 @@
     mode: '0755'
 
 # =============================================================================
-# Binary Deployment
+# Tarball Deployment
 # =============================================================================
 
-- name: Set artifact paths
+- name: Set tarball paths for latest
   set_fact:
-    s3_artifact_path: "builds/main/latest/theraprac-api-linux-arm64"
-    s3_checksum_path: "builds/main/latest/theraprac-api-linux-arm64.sha256"
+    s3_tarball_path: "builds/main/latest/theraprac-api-{{ version }}-linux-arm64.tar.gz"
+    s3_tarball_checksum_path: "builds/main/latest/theraprac-api-{{ version }}-linux-arm64.tar.gz.sha256"
   when: version == 'latest'
 
-- name: Set artifact paths for specific version
+- name: Set tarball paths for specific version
   set_fact:
-    s3_artifact_path: "releases/v{{ version }}/theraprac-api-linux-arm64"
-    s3_checksum_path: "releases/v{{ version }}/theraprac-api-linux-arm64.sha256"
+    s3_tarball_path: "releases/v{{ version }}/theraprac-api-{{ version }}-linux-arm64.tar.gz"
+    s3_tarball_checksum_path: "releases/v{{ version }}/theraprac-api-{{ version }}-linux-arm64.tar.gz.sha256"
   when: version != 'latest'
 
-- name: Download binary checksum from S3
-  amazon.aws.aws_s3:
-    bucket: "{{ s3_bucket }}"
-    object: "{{ s3_checksum_path }}"
-    dest: "/tmp/theraprac-api.sha256"
-    mode: get
-  register: checksum_download
+- name: Get version from manifest for latest builds
+  when: version == 'latest'
+  block:
+    - name: Download manifest from S3
+      amazon.aws.aws_s3:
+        bucket: "{{ s3_bucket }}"
+        object: "builds/main/latest/manifest.json"
+        dest: "/tmp/theraprac-manifest.json"
+        mode: get
 
-- name: Read checksum
-  slurp:
-    src: "/tmp/theraprac-api.sha256"
-  register: checksum_file
+    - name: Read manifest
+      slurp:
+        src: "/tmp/theraprac-manifest.json"
+      register: manifest_file
 
-- name: Set expected checksum
+    - name: Set actual version from manifest
+      set_fact:
+        actual_version: "{{ (manifest_file.content | b64decode | from_json).version }}"
+
+    - name: Update tarball paths with actual version
+      set_fact:
+        s3_tarball_path: "builds/main/latest/theraprac-api-{{ actual_version }}-linux-arm64.tar.gz"
+        s3_tarball_checksum_path: "builds/main/latest/theraprac-api-{{ actual_version }}-linux-arm64.tar.gz.sha256"
+
+- name: Set actual version for specific version
   set_fact:
-    expected_checksum: "{{ (checksum_file.content | b64decode).split()[0] }}"
+    actual_version: "{{ version }}"
+  when: version != 'latest'
 
-- name: Download binary from S3
+- name: Download tarball checksum from S3
   amazon.aws.aws_s3:
     bucket: "{{ s3_bucket }}"
-    object: "{{ s3_artifact_path }}"
-    dest: "{{ theraprac_bin_dir }}/{{ binary_name }}"
+    object: "{{ s3_tarball_checksum_path }}"
+    dest: "/tmp/theraprac-api.tar.gz.sha256"
     mode: get
-  register: binary_download
-  notify: restart theraprac-api
 
-- name: Verify binary checksum
+- name: Read tarball checksum
+  slurp:
+    src: "/tmp/theraprac-api.tar.gz.sha256"
+  register: tarball_checksum_file
+
+- name: Set expected tarball checksum
+  set_fact:
+    expected_tarball_checksum: "{{ (tarball_checksum_file.content | b64decode).split()[0] }}"
+
+- name: Download tarball from S3
+  amazon.aws.aws_s3:
+    bucket: "{{ s3_bucket }}"
+    object: "{{ s3_tarball_path }}"
+    dest: "/tmp/theraprac-api.tar.gz"
+    mode: get
+  register: tarball_download
+
+- name: Verify tarball checksum
   stat:
-    path: "{{ theraprac_bin_dir }}/{{ binary_name }}"
+    path: "/tmp/theraprac-api.tar.gz"
     checksum_algorithm: sha256
-  register: binary_stat
-  failed_when: binary_stat.stat.checksum != expected_checksum
+  register: tarball_stat
+  failed_when: tarball_stat.stat.checksum != expected_tarball_checksum
 
-- name: Set binary permissions
+- name: Create staging directory
   file:
-    path: "{{ theraprac_bin_dir }}/{{ binary_name }}"
+    path: /tmp/theraprac-staging
+    state: directory
+    mode: '0755'
+
+- name: Extract tarball
+  unarchive:
+    src: /tmp/theraprac-api.tar.gz
+    dest: /tmp/theraprac-staging
+    remote_src: yes
+
+- name: Copy binary from staging
+  copy:
+    src: /tmp/theraprac-staging/bin/theraprac-api
+    dest: "{{ theraprac_bin_dir }}/{{ binary_name }}"
+    remote_src: yes
     owner: "{{ theraprac_user }}"
     group: "{{ theraprac_group }}"
     mode: '0755'
+  notify: restart theraprac-api
+
+- name: Copy database migrations from staging
+  copy:
+    src: /tmp/theraprac-staging/db/changelog/
+    dest: "{{ theraprac_db_dir }}/changelog/"
+    remote_src: yes
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0644'
+    directory_mode: '0755'
+
+- name: Copy systemd service file from staging
+  copy:
+    src: /tmp/theraprac-staging/deploy/systemd/theraprac-api.service
+    dest: /etc/systemd/system/theraprac-api.service
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart theraprac-api
+
+- name: Clean up staging directory
+  file:
+    path: /tmp/theraprac-staging
+    state: absent
+
+- name: Clean up tarball
+  file:
+    path: /tmp/theraprac-api.tar.gz
+    state: absent
+
+# =============================================================================
+# Database Migrations
+# =============================================================================
+
+- name: Run database migrations
+  when: run_migrations | bool
+  block:
+    - name: Get database host from SSM
+      amazon.aws.ssm_parameter:
+        name: "{{ ssm_db_host_param }}"
+        region: "{{ aws_region }}"
+      register: ssm_db_host
+
+    - name: Get database port from SSM
+      amazon.aws.ssm_parameter:
+        name: "{{ ssm_db_port_param }}"
+        region: "{{ aws_region }}"
+      register: ssm_db_port
+
+    - name: Get database name from SSM
+      amazon.aws.ssm_parameter:
+        name: "{{ ssm_db_name_param }}"
+        region: "{{ aws_region }}"
+      register: ssm_db_name
+
+    - name: Get database admin user from SSM
+      amazon.aws.ssm_parameter:
+        name: "{{ ssm_db_admin_user_param }}"
+        region: "{{ aws_region }}"
+      register: ssm_db_admin_user
+
+    - name: Get database app user from SSM
+      amazon.aws.ssm_parameter:
+        name: "{{ ssm_db_user_param }}"
+        region: "{{ aws_region }}"
+      register: ssm_db_user
+
+    - name: Get secrets from Secrets Manager
+      amazon.aws.secretsmanager_secret:
+        name: "{{ secrets_manager_secret }}"
+        region: "{{ aws_region }}"
+      register: secrets_result
+
+    - name: Parse secrets JSON
+      set_fact:
+        db_secrets: "{{ secrets_result.secret | from_json }}"
+
+    - name: Display migration info
+      debug:
+        msg: |
+          Running database migrations
+          ============================
+          Host: {{ ssm_db_host.parameter.value }}
+          Port: {{ ssm_db_port.parameter.value }}
+          Database: {{ ssm_db_name.parameter.value }}
+          Admin User: {{ ssm_db_admin_user.parameter.value }}
+          Changelog: {{ theraprac_db_dir }}/{{ db_changelog_file }}
+
+    - name: Run Liquibase migrations
+      command: >
+        {{ liquibase_bin }}
+        --changeLogFile={{ theraprac_db_dir }}/{{ db_changelog_file }}
+        --url=jdbc:postgresql://{{ ssm_db_host.parameter.value }}:{{ ssm_db_port.parameter.value }}/{{ ssm_db_name.parameter.value }}?sslmode=require
+        --username={{ ssm_db_admin_user.parameter.value }}
+        --password={{ db_secrets.DB_ADMIN_PASSWORD }}
+        --liquibaseSchemaName=public
+        --changelog-parameters.DB_USER={{ ssm_db_user.parameter.value }}
+        --changelog-parameters.DB_PASSWORD={{ db_secrets.DB_PASSWORD }}
+        update
+      register: liquibase_result
+      changed_when: "'successfully' in liquibase_result.stdout or 'ChangeSet' in liquibase_result.stdout"
+      no_log: true  # Hide passwords from logs
+
+    - name: Display migration result
+      debug:
+        msg: "Database migrations completed successfully"
+      when: liquibase_result.rc == 0
 
 # =============================================================================
 # Configuration
@@ -131,17 +284,6 @@
 # =============================================================================
 # Systemd Service
 # =============================================================================
-
-- name: Copy systemd service file
-  copy:
-    src: "{{ playbook_dir }}/../../theraprac-api/deploy/systemd/theraprac-api.service"
-    dest: /etc/systemd/system/theraprac-api.service
-    owner: root
-    group: root
-    mode: '0644'
-  notify:
-    - reload systemd
-    - restart theraprac-api
 
 - name: Ensure systemd is reloaded if needed
   meta: flush_handlers
@@ -174,9 +316,9 @@
       TheraPrac API Deployment Complete
       =====================================
       Environment: {{ target_env }}
-      Version: {{ version }}
+      Version: {{ actual_version }}
       Binary: {{ theraprac_bin_dir }}/{{ binary_name }}
+      Migrations: {{ theraprac_db_dir }}/{{ db_changelog_file }}
       Config: {{ theraprac_etc_dir }}/theraprac-api.env
       Service: {{ service_name }}
       Status: {{ 'Running' if not ansible_check_mode else 'Check mode - not started' }}
-

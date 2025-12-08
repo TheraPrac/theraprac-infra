@@ -1,0 +1,91 @@
+---
+# =============================================================================
+# Liquibase Installation Role
+# =============================================================================
+# Installs Liquibase and PostgreSQL JDBC driver for database migrations.
+#
+# This role:
+#   1. Downloads Liquibase from GitHub releases
+#   2. Extracts to /opt/liquibase
+#   3. Downloads PostgreSQL JDBC driver
+#   4. Creates symlink at /usr/local/bin/liquibase
+# =============================================================================
+
+- name: Check if Liquibase is already installed
+  stat:
+    path: "{{ liquibase_install_dir }}/liquibase"
+  register: liquibase_installed
+
+- name: Check installed Liquibase version
+  command: "{{ liquibase_install_dir }}/liquibase --version"
+  register: liquibase_current_version
+  changed_when: false
+  failed_when: false
+  when: liquibase_installed.stat.exists
+
+- name: Set Liquibase needs install flag
+  set_fact:
+    liquibase_needs_install: >-
+      {{ not liquibase_installed.stat.exists or
+         (liquibase_current_version.stdout is defined and
+          liquibase_version not in liquibase_current_version.stdout) }}
+
+- name: Create Liquibase installation directory
+  file:
+    path: "{{ liquibase_install_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: liquibase_needs_install
+
+- name: Download Liquibase
+  get_url:
+    url: "https://github.com/liquibase/liquibase/releases/download/v{{ liquibase_version }}/liquibase-{{ liquibase_version }}.tar.gz"
+    dest: "/tmp/liquibase-{{ liquibase_version }}.tar.gz"
+    mode: '0644'
+  when: liquibase_needs_install
+
+- name: Extract Liquibase
+  unarchive:
+    src: "/tmp/liquibase-{{ liquibase_version }}.tar.gz"
+    dest: "{{ liquibase_install_dir }}"
+    remote_src: yes
+    owner: root
+    group: root
+  when: liquibase_needs_install
+
+- name: Clean up Liquibase archive
+  file:
+    path: "/tmp/liquibase-{{ liquibase_version }}.tar.gz"
+    state: absent
+  when: liquibase_needs_install
+
+- name: Check if PostgreSQL JDBC driver exists
+  stat:
+    path: "{{ liquibase_install_dir }}/lib/postgresql-{{ postgres_jdbc_version }}.jar"
+  register: postgres_jdbc_installed
+
+- name: Download PostgreSQL JDBC driver
+  get_url:
+    url: "https://jdbc.postgresql.org/download/postgresql-{{ postgres_jdbc_version }}.jar"
+    dest: "{{ liquibase_install_dir }}/lib/postgresql-{{ postgres_jdbc_version }}.jar"
+    mode: '0644'
+  when: not postgres_jdbc_installed.stat.exists
+
+- name: Create Liquibase symlink
+  file:
+    src: "{{ liquibase_install_dir }}/liquibase"
+    dest: "{{ liquibase_bin }}"
+    state: link
+    force: yes
+
+- name: Verify Liquibase installation
+  command: "{{ liquibase_bin }} --version"
+  register: liquibase_verify
+  changed_when: false
+
+- name: Display Liquibase version
+  debug:
+    msg: "Liquibase installed: {{ liquibase_verify.stdout_lines[0] | default('unknown') }}"
+
