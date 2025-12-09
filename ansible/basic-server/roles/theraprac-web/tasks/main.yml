@@ -251,18 +251,17 @@
   when: service_file.stat.exists
 
 # Stop and disable mock services that may be using port 3000
-- name: Check if mock-web service exists
+- name: Check if mock-app service exists
   ansible.builtin.stat:
-    path: /etc/systemd/system/mock-web.service
-  register: mock_web_service
+    path: /etc/systemd/system/mock-app.service
+  register: mock_app_service
 
-- name: Stop and disable mock-web service
+- name: Stop and disable mock-app service
   ansible.builtin.systemd:
-    name: mock-web
+    name: mock-app
     state: stopped
     enabled: no
-  when: mock_web_service.stat.exists
-  ignore_errors: true
+  when: mock_app_service.stat.exists
 
 # Cleanup PM2 if migrating from PM2-based deployment
 - name: Check if PM2 is installed
