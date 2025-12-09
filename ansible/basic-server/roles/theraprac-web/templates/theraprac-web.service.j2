@@ -21,7 +21,8 @@ Group={{ theraprac_group }}
 WorkingDirectory={{ theraprac_web_dir }}
 
 # Run the standalone server
-ExecStart=/usr/bin/node server.js
+# Node.js path determined by Ansible (typically /usr/bin/node after nodesource install)
+ExecStart={{ node_path | default('/usr/bin/node') }} server.js
 
 # Environment
 Environment="NODE_ENV={{ node_env }}"

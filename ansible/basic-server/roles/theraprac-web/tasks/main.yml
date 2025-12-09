@@ -58,6 +58,52 @@
     mode: '0755'
 
 # =============================================================================
+# Node.js Installation
+# =============================================================================
+
+- name: Check if Node.js binary exists
+  ansible.builtin.stat:
+    path: /usr/bin/node
+  register: node_bin
+
+- name: Install Node.js 20.x (Amazon Linux 2023)
+  when: not node_bin.stat.exists
+  block:
+    - name: Download Node.js setup script
+      get_url:
+        url: https://rpm.nodesource.com/setup_20.x
+        dest: /tmp/nodesource_setup.sh
+        mode: '0755'
+
+    - name: Run Node.js setup script
+      command: bash /tmp/nodesource_setup.sh
+      args:
+        creates: /etc/yum.repos.d/nodesource-el9.repo
+
+    - name: Install Node.js
+      dnf:
+        name: nodejs
+        state: present
+
+    - name: Clean up setup script
+      file:
+        path: /tmp/nodesource_setup.sh
+        state: absent
+
+- name: Get Node.js version
+  command: /usr/bin/node --version
+  register: node_version
+  changed_when: false
+
+- name: Set node_path fact
+  set_fact:
+    node_path: /usr/bin/node
+
+- name: Display Node.js info
+  debug:
+    msg: "Node.js {{ node_version.stdout }} at {{ node_path }}"
+
+# =============================================================================
 # Download and Deploy Tarball
 # =============================================================================
 
@@ -193,11 +239,16 @@
 # Stop Existing Services
 # =============================================================================
 
+- name: Check if theraprac-web service exists
+  ansible.builtin.stat:
+    path: /etc/systemd/system/{{ service_name }}.service
+  register: service_file
+
 - name: Stop existing systemd service
   systemd:
     name: "{{ service_name }}"
     state: stopped
-  ignore_errors: true
+  when: service_file.stat.exists
 
 # Stop and disable mock services that may be using port 3000
 - name: Check if mock-web service exists
@@ -215,17 +266,25 @@
 
 # Cleanup PM2 if migrating from PM2-based deployment
 - name: Check if PM2 is installed
-  command: which pm2
-  register: pm2_check
-  ignore_errors: true
-  changed_when: false
+  ansible.builtin.stat:
+    path: /usr/bin/pm2
+  register: pm2_bin
+
+- name: Check if PM2 is installed via npm global
+  ansible.builtin.stat:
+    path: /usr/local/bin/pm2
+  register: pm2_npm_bin
+
+- name: Set PM2 installed fact
+  set_fact:
+    pm2_installed: "{{ pm2_bin.stat.exists or pm2_npm_bin.stat.exists }}"
 
 - name: Stop PM2 theraprac-web process (migration from PM2)
   command: pm2 delete theraprac-web
   become: true
   become_user: "{{ theraprac_user }}"
   ignore_errors: true
-  when: pm2_check.rc == 0
+  when: pm2_installed
 
 # =============================================================================
 # Deploy Application Files (Standalone)
@@ -246,10 +305,9 @@
     mode: '0755'
 
 # Standalone tarball extracts directly (server.js, package.json, node_modules/, .next/, public/)
+# Use /. to copy all files including hidden directories like .next
 - name: Copy standalone files to web directory
-  shell: cp -r /tmp/theraprac-web-staging/* {{ theraprac_web_dir }}/
-  args:
-    warn: false
+  ansible.builtin.shell: cp -r /tmp/theraprac-web-staging/. {{ theraprac_web_dir }}/
 
 - name: Set ownership on web directory
   file:
