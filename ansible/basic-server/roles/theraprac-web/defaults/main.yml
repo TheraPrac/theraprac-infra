@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# TheraPrac Web Role Defaults
+# TheraPrac Web Role Defaults (Standalone Build)
 # =============================================================================
 
 # User and group
@@ -26,11 +26,8 @@ aws_region: us-west-2
 
 # Service configuration
 web_port: 3000
+web_hostname: "0.0.0.0"
 service_name: theraprac-web
-
-# PM2 configuration
-pm2_app_name: theraprac-web
 
 # Node.js settings
 node_env: production
-

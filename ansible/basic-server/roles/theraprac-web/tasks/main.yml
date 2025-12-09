@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# TheraPrac Web Role Tasks
+# TheraPrac Web Role Tasks (Standalone Build)
 # =============================================================================
 
 - name: Validate required variables
@@ -33,7 +33,7 @@
     name: "{{ theraprac_user }}"
     group: "{{ theraprac_group }}"
     system: yes
-    shell: /bin/bash
+    shell: /sbin/nologin
     home: "{{ theraprac_home }}"
     create_home: no
     comment: "TheraPrac Service Account"
@@ -87,11 +87,23 @@
     build_commit: "{{ (manifest_file.content | b64decode | from_json).commit_short }}"
     build_tag: "{{ (manifest_file.content | b64decode | from_json).tag }}"
 
+- name: Validate environment matches
+  assert:
+    that:
+      - build_env == target_env
+    fail_msg: |
+      Environment mismatch!
+      Build environment: {{ build_env }}
+      Target environment: {{ target_env }}
+      
+      You are trying to deploy a {{ build_env }} build to {{ target_env }}.
+      Please use the correct build for this environment.
+
 - name: Display deployment info
   debug:
     msg: |
-      Deploying TheraPrac Web
-      ========================
+      Deploying TheraPrac Web (Standalone)
+      =====================================
       Tag: {{ build_tag }}
       Version: {{ actual_version }}
       Environment: {{ build_env }}
@@ -178,19 +190,51 @@
     - "/tmp/theraprac-web-manifest-{{ ansible_hostname }}.json"
 
 # =============================================================================
-# Deploy Application Files
+# Stop Existing Services
 # =============================================================================
 
-- name: Stop existing PM2 process
-  command: pm2 stop {{ pm2_app_name }}
+- name: Stop existing systemd service
+  systemd:
+    name: "{{ service_name }}"
+    state: stopped
+  ignore_errors: true
+
+# Stop and disable mock services that may be using port 3000
+- name: Check if mock-web service exists
+  ansible.builtin.stat:
+    path: /etc/systemd/system/mock-web.service
+  register: mock_web_service
+
+- name: Stop and disable mock-web service
+  ansible.builtin.systemd:
+    name: mock-web
+    state: stopped
+    enabled: no
+  when: mock_web_service.stat.exists
+  ignore_errors: true
+
+# Cleanup PM2 if migrating from PM2-based deployment
+- name: Check if PM2 is installed
+  command: which pm2
+  register: pm2_check
+  ignore_errors: true
+  changed_when: false
+
+- name: Stop PM2 theraprac-web process (migration from PM2)
+  command: pm2 delete theraprac-web
   become: true
   become_user: "{{ theraprac_user }}"
   ignore_errors: true
+  when: pm2_check.rc == 0
+
+# =============================================================================
+# Deploy Application Files (Standalone)
+# =============================================================================
 
 - name: Backup existing web directory
   command: mv {{ theraprac_web_dir }} {{ theraprac_web_dir }}.bak.{{ ansible_date_time.epoch }}
   args:
-    removes: "{{ theraprac_web_dir }}/.next"
+    removes: "{{ theraprac_web_dir }}/server.js"
   ignore_errors: true
 
 - name: Create fresh web directory
@@ -201,14 +245,11 @@
     group: "{{ theraprac_group }}"
     mode: '0755'
 
-- name: Copy .next directory from staging
-  command: cp -r /tmp/theraprac-web-staging/.next {{ theraprac_web_dir }}/
-  become: true
-
-- name: Copy public directory from staging (if exists)
-  command: cp -r /tmp/theraprac-web-staging/public {{ theraprac_web_dir }}/
-  become: true
-  ignore_errors: true
+# Standalone tarball extracts directly (server.js, package.json, node_modules/, .next/, public/)
+- name: Copy standalone files to web directory
+  shell: cp -r /tmp/theraprac-web-staging/* {{ theraprac_web_dir }}/
+  args:
+    warn: false
 
 - name: Set ownership on web directory
   file:
@@ -218,23 +259,17 @@
     group: "{{ theraprac_group }}"
     recurse: yes
 
-- name: Create package.json for Next.js start
-  copy:
-    content: |
-      {
-        "name": "theraprac-web",
-        "version": "{{ actual_version }}",
-        "scripts": {
-          "start": "next start -p {{ web_port }}"
-        },
-        "dependencies": {
-          "next": "*"
-        }
-      }
-    dest: "{{ theraprac_web_dir }}/package.json"
-    owner: "{{ theraprac_user }}"
-    group: "{{ theraprac_group }}"
-    mode: '0644'
+- name: Verify server.js exists
+  stat:
+    path: "{{ theraprac_web_dir }}/server.js"
+  register: server_js_check
+  failed_when: not server_js_check.stat.exists
+
+- name: Verify .next directory exists
+  stat:
+    path: "{{ theraprac_web_dir }}/.next"
+  register: next_dir_check
+  failed_when: not next_dir_check.stat.exists
 
 - name: Clean up staging directory
   file:
@@ -247,89 +282,29 @@
     state: absent
 
 # =============================================================================
-# Install Node.js Dependencies
+# Systemd Service Setup
 # =============================================================================
 
-- name: Check if node_modules exists
-  stat:
-    path: "{{ theraprac_web_dir }}/node_modules"
-  register: node_modules
-
-- name: Install Next.js runtime dependency
-  command: npm install --production
-  args:
-    chdir: "{{ theraprac_web_dir }}"
-  become: true
-  become_user: "{{ theraprac_user }}"
-  when: not node_modules.stat.exists
-  environment:
-    NODE_ENV: production
-
-# =============================================================================
-# PM2 Service Setup
-# =============================================================================
-
-- name: Check if PM2 is installed globally
-  command: which pm2
-  register: pm2_check
-  ignore_errors: true
-  changed_when: false
-
-- name: Install PM2 globally
-  npm:
-    name: pm2
-    global: yes
-    state: present
-  when: pm2_check.rc != 0
-
-- name: Create PM2 ecosystem file
-  copy:
-    content: |
-      module.exports = {
-        apps: [{
-          name: '{{ pm2_app_name }}',
-          cwd: '{{ theraprac_web_dir }}',
-          script: 'node_modules/next/dist/bin/next',
-          args: 'start -p {{ web_port }}',
-          env: {
-            NODE_ENV: '{{ node_env }}',
-            PORT: '{{ web_port }}'
-          },
-          instances: 1,
-          autorestart: true,
-          watch: false,
-          max_memory_restart: '1G',
-          log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-          error_file: '{{ theraprac_log_dir }}/theraprac-web-error.log',
-          out_file: '{{ theraprac_log_dir }}/theraprac-web-out.log'
-        }]
-      };
-    dest: "{{ theraprac_web_dir }}/ecosystem.config.js"
-    owner: "{{ theraprac_user }}"
-    group: "{{ theraprac_group }}"
+- name: Install systemd service file
+  template:
+    src: theraprac-web.service.j2
+    dest: /etc/systemd/system/{{ service_name }}.service
+    owner: root
+    group: root
     mode: '0644'
+  notify:
+    - reload systemd
+    - restart theraprac-web
 
-- name: Delete existing PM2 process (if exists)
-  command: pm2 delete {{ pm2_app_name }}
-  become: true
-  become_user: "{{ theraprac_user }}"
-  ignore_errors: true
+- name: Ensure systemd is reloaded if needed
+  meta: flush_handlers
 
-- name: Start application with PM2
-  command: pm2 start {{ theraprac_web_dir }}/ecosystem.config.js
-  become: true
-  become_user: "{{ theraprac_user }}"
-
-- name: Save PM2 process list
-  command: pm2 save
-  become: true
-  become_user: "{{ theraprac_user }}"
-
-- name: Setup PM2 startup script
-  command: pm2 startup systemd -u {{ theraprac_user }} --hp {{ theraprac_home }}
-  register: pm2_startup
-  ignore_errors: true
-  changed_when: "'systemctl' in pm2_startup.stdout"
+- name: Enable and start service
+  systemd:
+    name: "{{ service_name }}"
+    enabled: yes
+    state: started
+  when: not ansible_check_mode
 
 # =============================================================================
 # Health Check
@@ -337,7 +312,7 @@
 
 - name: Wait for application to be healthy
   uri:
-    url: "http://localhost:{{ web_port }}/"
+    url: "http://localhost:{{ web_port }}/api/health"
     method: GET
     status_code: 200
     timeout: 10
@@ -350,14 +325,18 @@
 
 - name: Display health check result
   debug:
-    msg: "Health check {{ 'passed' if health_check.status == 200 else 'failed - check logs' }}"
+    msg: |
+      Health check: {{ 'PASSED' if (health_check.status | default(0)) == 200 else 'FAILED - check logs' }}
+      {% if health_check.json is defined %}
+      Response: {{ health_check.json | to_nice_json }}
+      {% endif %}
   when: not ansible_check_mode
 
 - name: Display deployment summary
   debug:
     msg: |
-      TheraPrac Web Deployment Complete
-      =====================================
+      TheraPrac Web Deployment Complete (Standalone)
+      ===============================================
       Environment: {{ target_env }}
       Version: {{ actual_version }}
       Tag: {{ build_tag }}
@@ -365,6 +344,9 @@
       Commit: {{ build_commit }}
       Directory: {{ theraprac_web_dir }}
       Port: {{ web_port }}
-      PM2 App: {{ pm2_app_name }}
-      Status: {{ 'Running' if (health_check.status | default(0)) == 200 else 'Check logs' }}
-
+      Service: {{ service_name }}
+      Status: {{ 'Running' if (health_check.status | default(0)) == 200 else 'Check logs with: journalctl -u theraprac-web -n 50' }}
+      
+      Commands:
+        systemctl status {{ service_name }}
+        journalctl -u {{ service_name }} -f

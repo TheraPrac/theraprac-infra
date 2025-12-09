@@ -1,16 +1,25 @@
 ---
 # =============================================================================
-# TheraPrac Web Role Handlers
+# TheraPrac Web Role Handlers (Systemd)
 # =============================================================================
 
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
 - name: restart theraprac-web
-  command: pm2 restart {{ pm2_app_name }}
-  become: true
-  become_user: "{{ theraprac_user }}"
-  ignore_errors: true
+  systemd:
+    name: "{{ service_name }}"
+    state: restarted
+  when: not ansible_check_mode
+
+- name: start theraprac-web
+  systemd:
+    name: "{{ service_name }}"
+    state: started
+  when: not ansible_check_mode
 
 - name: reload nginx
   systemd:
     name: nginx
     state: reloaded
-

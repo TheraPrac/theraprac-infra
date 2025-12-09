@@ -326,7 +326,7 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}✓ Web health check passed${NC}"
 else
     echo -e "${YELLOW}Warning: Health check did not complete${NC}"
-    echo "Check logs: ssh ansible@${SERVER_HOST} 'pm2 logs theraprac-web --lines 50'"
+    echo "Check logs: ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-web -n 50'"
 fi
 
 # =============================================================================
@@ -346,9 +346,9 @@ echo -e "  ${BLUE}Web available at:${NC}"
 echo -e "    https://${WEB_DOMAIN}"
 echo ""
 echo -e "  ${BLUE}View logs:${NC}"
-echo -e "    ssh ansible@${SERVER_HOST} 'pm2 logs theraprac-web'"
+echo -e "    ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-web -f'"
 echo ""
 echo -e "  ${BLUE}Service status:${NC}"
-echo -e "    ssh ansible@${SERVER_HOST} 'pm2 status'"
+echo -e "    ssh ansible@${SERVER_HOST} 'systemctl status theraprac-web'"
 echo ""
 

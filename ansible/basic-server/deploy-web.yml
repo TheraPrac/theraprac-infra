@@ -96,12 +96,12 @@
         msg: |
           ✅ TheraPrac Web deployment complete!
           
-          PM2 Status:
-            pm2 status
+          Service Status:
+            systemctl status theraprac-web
           
           View Logs:
-            pm2 logs theraprac-web
+            journalctl -u theraprac-web -f
           
           Health Check:
-            curl http://localhost:3000/
+            curl http://localhost:3000/api/health
 
