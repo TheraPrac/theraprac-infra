@@ -1,0 +1,107 @@
+---
+# =============================================================================
+# TheraPrac Web Deployment Playbook
+# =============================================================================
+#
+# Deploys the TheraPrac Web application to target servers.
+#
+# Usage:
+#   # Deploy latest build from main to dev environment
+#   ansible-playbook deploy-web.yml -i inventory/ziti.yml --limit web-mt-dev \
+#     -e "target_env=dev s3_path=builds/dev/main/latest"
+#
+#   # Deploy specific tag
+#   ansible-playbook deploy-web.yml -i inventory/ziti.yml --limit web-mt-dev \
+#     -e "target_env=dev s3_path=builds/dev/main/v0.1.0-dev.1"
+#
+#   # Deploy a release
+#   ansible-playbook deploy-web.yml -i inventory/ziti.yml --limit web-mt-prod \
+#     -e "target_env=prod s3_path=releases/v0.1.0"
+#
+#   # Dry run (check mode)
+#   ansible-playbook deploy-web.yml -i inventory/ziti.yml --limit web-mt-dev \
+#     -e "target_env=dev s3_path=builds/dev/main/latest" --check
+#
+# Required variables (pass via -e or inventory):
+#   target_env: dev | test | prod
+#   s3_path: S3 path to build (e.g., builds/dev/main/latest)
+#
+# Optional variables:
+#   s3_bucket: Override S3 bucket for artifacts
+#   aws_account_id: Override AWS account ID
+# =============================================================================
+
+- name: Deploy TheraPrac Web
+  hosts: app_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    # Default AWS region
+    aws_region: us-west-2
+    
+    # Default S3 bucket
+    s3_bucket: "{{ lookup('env', 'THERAPRAC_WEB_S3_BUCKET') | default('theraprac-web', true) }}"
+    
+    # AWS account ID (should be overridden in inventory)
+    aws_account_id: "{{ lookup('env', 'AWS_ACCOUNT_ID') | default('', true) }}"
+
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - target_env is defined
+          - target_env in ['dev', 'test', 'prod']
+          - s3_path is defined
+        fail_msg: |
+          Missing required variables!
+          
+          Required:
+            - target_env: Target environment (dev, test, or prod)
+            - s3_path: S3 path to build (e.g., builds/dev/main/latest)
+          
+          Example:
+            ansible-playbook deploy-web.yml -i inventory/ziti.yml --limit web-mt-dev \
+              -e "target_env=dev s3_path=builds/dev/main/latest"
+
+    - name: Get AWS account ID if not provided
+      command: aws sts get-caller-identity --query Account --output text
+      register: aws_account_result
+      changed_when: false
+      when: aws_account_id == ''
+
+    - name: Set AWS account ID from CLI
+      set_fact:
+        aws_account_id: "{{ aws_account_result.stdout }}"
+      when: aws_account_id == ''
+
+    - name: Display deployment info
+      debug:
+        msg: |
+          TheraPrac Web Deployment
+          ========================
+          Target Environment: {{ target_env }}
+          S3 Path: {{ s3_path }}
+          AWS Region: {{ aws_region }}
+          AWS Account: {{ aws_account_id }}
+          S3 Bucket: {{ s3_bucket }}
+          Target Hosts: {{ ansible_play_hosts | join(', ') }}
+
+  roles:
+    - role: theraprac-web
+
+  post_tasks:
+    - name: Deployment complete
+      debug:
+        msg: |
+          ✅ TheraPrac Web deployment complete!
+          
+          PM2 Status:
+            pm2 status
+          
+          View Logs:
+            pm2 logs theraprac-web
+          
+          Health Check:
+            curl http://localhost:3000/
+

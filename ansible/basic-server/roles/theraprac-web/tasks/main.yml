@@ -1,0 +1,370 @@
+---
+# =============================================================================
+# TheraPrac Web Role Tasks
+# =============================================================================
+
+- name: Validate required variables
+  assert:
+    that:
+      - target_env is defined
+      - target_env in ['dev', 'test', 'prod']
+      - aws_account_id is defined
+      - s3_bucket is defined
+      - s3_path is defined
+    fail_msg: |
+      Required variables:
+        - target_env: {{ target_env | default('NOT SET') }} (must be dev, test, or prod)
+        - aws_account_id: {{ aws_account_id | default('NOT SET') }}
+        - s3_bucket: {{ s3_bucket | default('NOT SET') }}
+        - s3_path: {{ s3_path | default('NOT SET') }}
+
+# =============================================================================
+# User and Directory Setup
+# =============================================================================
+
+- name: Create theraprac system group
+  group:
+    name: "{{ theraprac_group }}"
+    system: yes
+    state: present
+
+- name: Create theraprac system user
+  user:
+    name: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    system: yes
+    shell: /bin/bash
+    home: "{{ theraprac_home }}"
+    create_home: no
+    comment: "TheraPrac Service Account"
+
+- name: Create application directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0755'
+  loop:
+    - "{{ theraprac_home }}"
+    - "{{ theraprac_web_dir }}"
+
+- name: Create log directory
+  file:
+    path: "{{ theraprac_log_dir }}"
+    state: directory
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0755'
+
+# =============================================================================
+# Download and Deploy Tarball
+# =============================================================================
+
+- name: Download manifest from S3
+  command: >
+    aws s3 cp
+    s3://{{ s3_bucket }}/{{ s3_path }}/manifest.json
+    /tmp/theraprac-web-manifest-{{ ansible_hostname }}.json
+    --profile jfinlinson_admin
+    --region {{ aws_region }}
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Read manifest
+  slurp:
+    src: "/tmp/theraprac-web-manifest-{{ ansible_hostname }}.json"
+  register: manifest_file
+  delegate_to: localhost
+  become: false
+
+- name: Set deployment facts from manifest
+  set_fact:
+    actual_version: "{{ (manifest_file.content | b64decode | from_json).version }}"
+    build_env: "{{ (manifest_file.content | b64decode | from_json).environment }}"
+    build_branch: "{{ (manifest_file.content | b64decode | from_json).branch }}"
+    build_commit: "{{ (manifest_file.content | b64decode | from_json).commit_short }}"
+    build_tag: "{{ (manifest_file.content | b64decode | from_json).tag }}"
+
+- name: Display deployment info
+  debug:
+    msg: |
+      Deploying TheraPrac Web
+      ========================
+      Tag: {{ build_tag }}
+      Version: {{ actual_version }}
+      Environment: {{ build_env }}
+      Branch: {{ build_branch }}
+      Commit: {{ build_commit }}
+      S3 Path: s3://{{ s3_bucket }}/{{ s3_path }}/
+
+- name: Set tarball name
+  set_fact:
+    tarball_name: "theraprac-web-{{ actual_version }}-{{ build_env }}.tar.gz"
+
+- name: Download tarball checksum from S3
+  command: >
+    aws s3 cp
+    s3://{{ s3_bucket }}/{{ s3_path }}/{{ tarball_name }}.sha256
+    /tmp/theraprac-web-{{ ansible_hostname }}.tar.gz.sha256
+    --profile jfinlinson_admin
+    --region {{ aws_region }}
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  ignore_errors: true
+  register: checksum_download
+
+- name: Read tarball checksum
+  slurp:
+    src: "/tmp/theraprac-web-{{ ansible_hostname }}.tar.gz.sha256"
+  register: tarball_checksum_file
+  delegate_to: localhost
+  become: false
+  when: checksum_download.rc == 0
+
+- name: Set expected tarball checksum
+  set_fact:
+    expected_tarball_checksum: "{{ (tarball_checksum_file.content | b64decode).split()[0] }}"
+  when: checksum_download.rc == 0
+
+- name: Download tarball from S3 to localhost
+  command: >
+    aws s3 cp
+    s3://{{ s3_bucket }}/{{ s3_path }}/{{ tarball_name }}
+    /tmp/theraprac-web-{{ ansible_hostname }}.tar.gz
+    --profile jfinlinson_admin
+    --region {{ aws_region }}
+  register: tarball_download
+  delegate_to: localhost
+  become: false
+
+- name: Copy tarball from localhost to remote server
+  copy:
+    src: "/tmp/theraprac-web-{{ ansible_hostname }}.tar.gz"
+    dest: "/tmp/theraprac-web.tar.gz"
+    mode: '0644'
+
+- name: Verify tarball checksum on remote server
+  stat:
+    path: "/tmp/theraprac-web.tar.gz"
+    checksum_algorithm: sha256
+  register: tarball_stat
+  failed_when: expected_tarball_checksum is defined and tarball_stat.stat.checksum != expected_tarball_checksum
+  when: checksum_download.rc == 0
+
+- name: Create staging directory
+  file:
+    path: /tmp/theraprac-web-staging
+    state: directory
+    mode: '0755'
+
+- name: Extract tarball
+  unarchive:
+    src: /tmp/theraprac-web.tar.gz
+    dest: /tmp/theraprac-web-staging
+    remote_src: yes
+
+- name: Clean up temporary files on localhost
+  file:
+    path: "{{ item }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  loop:
+    - "/tmp/theraprac-web-{{ ansible_hostname }}.tar.gz"
+    - "/tmp/theraprac-web-{{ ansible_hostname }}.tar.gz.sha256"
+    - "/tmp/theraprac-web-manifest-{{ ansible_hostname }}.json"
+
+# =============================================================================
+# Deploy Application Files
+# =============================================================================
+
+- name: Stop existing PM2 process
+  command: pm2 stop {{ pm2_app_name }}
+  become: true
+  become_user: "{{ theraprac_user }}"
+  ignore_errors: true
+
+- name: Backup existing web directory
+  command: mv {{ theraprac_web_dir }} {{ theraprac_web_dir }}.bak.{{ ansible_date_time.epoch }}
+  args:
+    removes: "{{ theraprac_web_dir }}/.next"
+  ignore_errors: true
+
+- name: Create fresh web directory
+  file:
+    path: "{{ theraprac_web_dir }}"
+    state: directory
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0755'
+
+- name: Copy .next directory from staging
+  command: cp -r /tmp/theraprac-web-staging/.next {{ theraprac_web_dir }}/
+  become: true
+
+- name: Copy public directory from staging (if exists)
+  command: cp -r /tmp/theraprac-web-staging/public {{ theraprac_web_dir }}/
+  become: true
+  ignore_errors: true
+
+- name: Set ownership on web directory
+  file:
+    path: "{{ theraprac_web_dir }}"
+    state: directory
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    recurse: yes
+
+- name: Create package.json for Next.js start
+  copy:
+    content: |
+      {
+        "name": "theraprac-web",
+        "version": "{{ actual_version }}",
+        "scripts": {
+          "start": "next start -p {{ web_port }}"
+        },
+        "dependencies": {
+          "next": "*"
+        }
+      }
+    dest: "{{ theraprac_web_dir }}/package.json"
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0644'
+
+- name: Clean up staging directory
+  file:
+    path: /tmp/theraprac-web-staging
+    state: absent
+
+- name: Clean up tarball
+  file:
+    path: /tmp/theraprac-web.tar.gz
+    state: absent
+
+# =============================================================================
+# Install Node.js Dependencies
+# =============================================================================
+
+- name: Check if node_modules exists
+  stat:
+    path: "{{ theraprac_web_dir }}/node_modules"
+  register: node_modules
+
+- name: Install Next.js runtime dependency
+  command: npm install --production
+  args:
+    chdir: "{{ theraprac_web_dir }}"
+  become: true
+  become_user: "{{ theraprac_user }}"
+  when: not node_modules.stat.exists
+  environment:
+    NODE_ENV: production
+
+# =============================================================================
+# PM2 Service Setup
+# =============================================================================
+
+- name: Check if PM2 is installed globally
+  command: which pm2
+  register: pm2_check
+  ignore_errors: true
+  changed_when: false
+
+- name: Install PM2 globally
+  npm:
+    name: pm2
+    global: yes
+    state: present
+  when: pm2_check.rc != 0
+
+- name: Create PM2 ecosystem file
+  copy:
+    content: |
+      module.exports = {
+        apps: [{
+          name: '{{ pm2_app_name }}',
+          cwd: '{{ theraprac_web_dir }}',
+          script: 'node_modules/next/dist/bin/next',
+          args: 'start -p {{ web_port }}',
+          env: {
+            NODE_ENV: '{{ node_env }}',
+            PORT: '{{ web_port }}'
+          },
+          instances: 1,
+          autorestart: true,
+          watch: false,
+          max_memory_restart: '1G',
+          log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+          error_file: '{{ theraprac_log_dir }}/theraprac-web-error.log',
+          out_file: '{{ theraprac_log_dir }}/theraprac-web-out.log'
+        }]
+      };
+    dest: "{{ theraprac_web_dir }}/ecosystem.config.js"
+    owner: "{{ theraprac_user }}"
+    group: "{{ theraprac_group }}"
+    mode: '0644'
+
+- name: Delete existing PM2 process (if exists)
+  command: pm2 delete {{ pm2_app_name }}
+  become: true
+  become_user: "{{ theraprac_user }}"
+  ignore_errors: true
+
+- name: Start application with PM2
+  command: pm2 start {{ theraprac_web_dir }}/ecosystem.config.js
+  become: true
+  become_user: "{{ theraprac_user }}"
+
+- name: Save PM2 process list
+  command: pm2 save
+  become: true
+  become_user: "{{ theraprac_user }}"
+
+- name: Setup PM2 startup script
+  command: pm2 startup systemd -u {{ theraprac_user }} --hp {{ theraprac_home }}
+  register: pm2_startup
+  ignore_errors: true
+  changed_when: "'systemctl' in pm2_startup.stdout"
+
+# =============================================================================
+# Health Check
+# =============================================================================
+
+- name: Wait for application to be healthy
+  uri:
+    url: "http://localhost:{{ web_port }}/"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: health_check
+  retries: 30
+  delay: 2
+  until: health_check.status == 200
+  when: not ansible_check_mode
+  ignore_errors: true
+
+- name: Display health check result
+  debug:
+    msg: "Health check {{ 'passed' if health_check.status == 200 else 'failed - check logs' }}"
+  when: not ansible_check_mode
+
+- name: Display deployment summary
+  debug:
+    msg: |
+      TheraPrac Web Deployment Complete
+      =====================================
+      Environment: {{ target_env }}
+      Version: {{ actual_version }}
+      Tag: {{ build_tag }}
+      Branch: {{ build_branch }}
+      Commit: {{ build_commit }}
+      Directory: {{ theraprac_web_dir }}
+      Port: {{ web_port }}
+      PM2 App: {{ pm2_app_name }}
+      Status: {{ 'Running' if (health_check.status | default(0)) == 200 else 'Check logs' }}
+

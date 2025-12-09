@@ -1,0 +1,16 @@
+---
+# =============================================================================
+# TheraPrac Web Role Handlers
+# =============================================================================
+
+- name: restart theraprac-web
+  command: pm2 restart {{ pm2_app_name }}
+  become: true
+  become_user: "{{ theraprac_user }}"
+  ignore_errors: true
+
+- name: reload nginx
+  systemd:
+    name: nginx
+    state: reloaded
+

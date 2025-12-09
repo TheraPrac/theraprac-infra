@@ -1,0 +1,36 @@
+---
+# =============================================================================
+# TheraPrac Web Role Defaults
+# =============================================================================
+
+# User and group
+theraprac_user: theraprac
+theraprac_group: theraprac
+
+# Directory structure
+theraprac_home: /opt/theraprac
+theraprac_web_dir: "{{ theraprac_home }}/web"
+theraprac_log_dir: /var/log/theraprac
+
+# AWS Configuration
+aws_region: us-west-2
+
+# S3 bucket for artifacts (override in playbook or inventory)
+# s3_bucket: ""
+
+# S3 path (override in playbook)
+# s3_path: ""
+
+# Application version (override in playbook)
+# version: ""
+
+# Service configuration
+web_port: 3000
+service_name: theraprac-web
+
+# PM2 configuration
+pm2_app_name: theraprac-web
+
+# Node.js settings
+node_env: production
+
