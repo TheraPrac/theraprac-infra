@@ -352,17 +352,45 @@ cd "$REPO_ROOT"
 
 print_header "Step 4: Verifying Deployment"
 
-echo -e "${YELLOW}Waiting for API to be healthy...${NC}"
+echo -e "${YELLOW}Checking service status...${NC}"
 
 # Give the service a moment to start
 sleep 5
 
+# First, check if the service is running
+SERVICE_ACTIVE=false
+for i in {1..10}; do
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
+        "systemctl is-active --quiet theraprac-api" 2>/dev/null; then
+        SERVICE_ACTIVE=true
+        break
+    fi
+    echo -n "."
+    sleep 2
+done
+echo ""
+
+if [ "$SERVICE_ACTIVE" != "true" ]; then
+    echo -e "${RED}✗ Service is not active${NC}"
+    echo "Checking service status..."
+    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
+        "systemctl status theraprac-api --no-pager -n 20" 2>&1 || true
+    echo ""
+    echo "Check logs: ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-api -n 50'"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Service is active${NC}"
+echo -e "${YELLOW}Waiting for API to be healthy...${NC}"
+
 # Try health check via Ziti (if available)
 # Note: The API endpoint is /health (not /healthz)
 HEALTH_OK=false
+HEALTH_RESPONSE=""
 for i in {1..30}; do
-    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
-        "curl -sf http://localhost:8080/health" >/dev/null 2>&1; then
+    HEALTH_RESPONSE=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
+        "curl -sf http://localhost:8080/health" 2>&1)
+    if [ $? -eq 0 ] && [ -n "$HEALTH_RESPONSE" ]; then
         HEALTH_OK=true
         break
     fi
@@ -373,9 +401,17 @@ echo ""
 
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}✓ API health check passed${NC}"
+    # Show a summary of the health response
+    echo "$HEALTH_RESPONSE" | grep -o '"status":"[^"]*"' | head -1 || true
 else
     echo -e "${YELLOW}Warning: Health check did not complete${NC}"
+    if [ -n "$HEALTH_RESPONSE" ]; then
+        echo "Health check response:"
+        echo "$HEALTH_RESPONSE"
+    fi
+    echo ""
     echo "Check logs: ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-api -n 50'"
+    echo "Check service: ssh ansible@${SERVER_HOST} 'systemctl status theraprac-api'"
 fi
 
 # =============================================================================
