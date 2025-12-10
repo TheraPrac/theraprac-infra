@@ -358,10 +358,11 @@ echo -e "${YELLOW}Waiting for API to be healthy...${NC}"
 sleep 5
 
 # Try health check via Ziti (if available)
+# Note: The API endpoint is /health (not /healthz)
 HEALTH_OK=false
 for i in {1..30}; do
     if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
-        "curl -sf http://localhost:8080/healthz" >/dev/null 2>&1; then
+        "curl -sf http://localhost:8080/health" >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
@@ -391,8 +392,8 @@ echo ""
 echo -e "  ${BLUE}API available at:${NC}"
 echo -e "    https://${API_DOMAIN}"
 echo ""
-echo -e "  ${BLUE}Health check:${NC}"
-echo -e "    curl https://${API_DOMAIN}/healthz"
+  echo -e "  ${BLUE}Health check:${NC}"
+  echo -e "    curl https://${API_DOMAIN}/health"
 echo ""
 echo -e "  ${BLUE}View logs:${NC}"
 echo -e "    ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-api -f'"
