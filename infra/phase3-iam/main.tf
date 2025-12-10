@@ -378,6 +378,37 @@ resource "aws_iam_policy" "api_ssm" {
 }
 
 # =============================================================================
+# Managed Policy: API SES Permissions
+# =============================================================================
+# SES permissions for the TheraPrac API to send emails.
+#
+# Allows sending from the theraprac.com verified domain identity.
+
+data "aws_iam_policy_document" "api_ses" {
+  statement {
+    sid    = "SESSendEmail"
+    effect = "Allow"
+    actions = [
+      "ses:SendEmail",
+      "ses:SendRawEmail",
+    ]
+    resources = [
+      "arn:aws:ses:${var.aws_region}:${local.account_id}:identity/theraprac.com"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "api_ses" {
+  name        = "TheraPrac-API-SES"
+  description = "SES permissions for TheraPrac API to send emails"
+  policy      = data.aws_iam_policy_document.api_ses.json
+
+  tags = {
+    Name = "TheraPrac-API-SES"
+  }
+}
+
+# =============================================================================
 # IAM Role: Ziti Controller
 # =============================================================================
 # Policies: Base + Observability + Secrets (for bootstrap config)
@@ -498,6 +529,11 @@ resource "aws_iam_role_policy_attachment" "app_server_kms" {
 resource "aws_iam_role_policy_attachment" "app_server_ssm" {
   role       = aws_iam_role.app_server.name
   policy_arn = aws_iam_policy.api_ssm.arn
+}
+
+resource "aws_iam_role_policy_attachment" "app_server_ses" {
+  role       = aws_iam_role.app_server.name
+  policy_arn = aws_iam_policy.api_ses.arn
 }
 
 resource "aws_iam_instance_profile" "app_server" {
