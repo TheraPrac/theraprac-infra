@@ -91,7 +91,7 @@
 - name: Get version from manifest for main/latest builds
   when: is_latest | bool
   block:
-    - name: Download manifest from S3
+    - name: Download manifest from S3 (force fresh download)
       command: >
         aws s3 cp
         s3://{{ s3_bucket }}/builds/main/latest/manifest.json
@@ -101,6 +101,8 @@
       delegate_to: localhost
       become: false
       changed_when: false
+      # Force fresh download
+      register: manifest_download
 
     - name: Read manifest
       slurp:
@@ -109,9 +111,22 @@
       delegate_to: localhost
       become: false
 
-    - name: Set actual version from manifest
+    - name: Set actual version and build info from manifest
       set_fact:
         actual_version: "{{ (manifest_file.content | b64decode | from_json).version }}"
+        build_commit: "{{ (manifest_file.content | b64decode | from_json).commit_short | default('unknown') }}"
+        build_timestamp: "{{ (manifest_file.content | b64decode | from_json).build_timestamp | default('unknown') }}"
+        build_branch: "{{ (manifest_file.content | b64decode | from_json).branch | default('unknown') }}"
+
+    - name: Display build info being deployed
+      debug:
+        msg: |
+          Deploying build:
+            Version: {{ actual_version }}
+            Commit: {{ build_commit }}
+            Branch: {{ build_branch }}
+            Build Time: {{ build_timestamp }}
+            S3 Path: s3://{{ s3_bucket }}/builds/main/latest/
 
     - name: Update tarball paths with actual version
       set_fact:
@@ -121,7 +136,7 @@
 - name: Get version from manifest for branch builds
   when: is_branch_build | bool
   block:
-    - name: Download manifest from S3
+    - name: Download manifest from S3 (force fresh download)
       command: >
         aws s3 cp
         s3://{{ s3_bucket }}/builds/{{ version }}/manifest.json
@@ -131,6 +146,8 @@
       delegate_to: localhost
       become: false
       changed_when: false
+      # Force fresh download by removing any cached file first
+      register: manifest_download
 
     - name: Read manifest
       slurp:
@@ -139,9 +156,22 @@
       delegate_to: localhost
       become: false
 
-    - name: Set actual version from manifest
+    - name: Set actual version and build info from manifest
       set_fact:
         actual_version: "{{ (manifest_file.content | b64decode | from_json).version }}"
+        build_commit: "{{ (manifest_file.content | b64decode | from_json).commit_short | default('unknown') }}"
+        build_timestamp: "{{ (manifest_file.content | b64decode | from_json).build_timestamp | default('unknown') }}"
+        build_branch: "{{ (manifest_file.content | b64decode | from_json).branch | default('unknown') }}"
+
+    - name: Display build info being deployed
+      debug:
+        msg: |
+          Deploying build:
+            Version: {{ actual_version }}
+            Commit: {{ build_commit }}
+            Branch: {{ build_branch }}
+            Build Time: {{ build_timestamp }}
+            S3 Path: s3://{{ s3_bucket }}/builds/{{ version }}/
 
     - name: Update tarball paths with actual version
       set_fact:

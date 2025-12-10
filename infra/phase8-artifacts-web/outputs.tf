@@ -22,3 +22,4 @@ output "lifecycle_policy_status" {
   value       = "Environment builds expire after ${var.build_retention_days} days. Latest pointers stay fresh. Releases kept forever."
 }
 
+

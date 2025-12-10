@@ -34,3 +34,4 @@ ziti edge list identities --output-json 2>/dev/null | jq -r '.data[] | "\(.name)
     echo -e "${GREEN}$name${NC} | $type | $roles"
 done
 
+

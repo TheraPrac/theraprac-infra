@@ -92,3 +92,4 @@
       - Identity file: /opt/ziti/cfg/{{ ziti_identity_name }}.json
       - Ready for service registration
 
+

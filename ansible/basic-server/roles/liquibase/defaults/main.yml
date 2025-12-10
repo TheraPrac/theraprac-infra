@@ -15,3 +15,4 @@ postgres_jdbc_version: "42.7.4"
 # Symlink location
 liquibase_bin: /usr/local/bin/liquibase
 
+

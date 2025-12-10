@@ -16,3 +16,4 @@ all:
       ansible_aws_ssm_region: us-west-2
 
 
+

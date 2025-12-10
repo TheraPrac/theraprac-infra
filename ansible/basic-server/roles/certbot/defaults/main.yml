@@ -19,3 +19,4 @@ aws_region: us-west-2
 # Certificate renewal threshold (days before expiration to renew)
 certbot_renewal_threshold: 30
 
+
