@@ -354,13 +354,22 @@ print_header "Step 4: Verifying Deployment"
 
 echo -e "${YELLOW}Checking service status...${NC}"
 
+# Auto-detect which SSH user works
+SSH_USER="ansible"
+if ! ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" "echo test" >/dev/null 2>&1; then
+    if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o BatchMode=yes "jfinlinson@${SERVER_HOST}" "echo test" >/dev/null 2>&1; then
+        SSH_USER="jfinlinson"
+        echo -e "${YELLOW}Note: Using jfinlinson user (ansible not available)${NC}"
+    fi
+fi
+
 # Give the service a moment to start
 sleep 5
 
 # First, check if the service is running
 SERVICE_ACTIVE=false
 for i in {1..10}; do
-    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
         "systemctl is-active --quiet theraprac-api" 2>/dev/null; then
         SERVICE_ACTIVE=true
         break
@@ -373,10 +382,10 @@ echo ""
 if [ "$SERVICE_ACTIVE" != "true" ]; then
     echo -e "${RED}✗ Service is not active${NC}"
     echo "Checking service status..."
-    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
+    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
         "systemctl status theraprac-api --no-pager -n 20" 2>&1 || true
     echo ""
-    echo "Check logs: ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-api -n 50'"
+    echo "Check logs: ssh ${SSH_USER}@${SERVER_HOST} 'journalctl -u theraprac-api -n 50'"
     exit 1
 fi
 
@@ -388,7 +397,7 @@ echo -e "${YELLOW}Waiting for API to be healthy...${NC}"
 HEALTH_OK=false
 HEALTH_RESPONSE=""
 for i in {1..30}; do
-    HEALTH_RESPONSE=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" \
+    HEALTH_RESPONSE=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
         "curl -sf http://localhost:8080/health" 2>&1)
     if [ $? -eq 0 ] && [ -n "$HEALTH_RESPONSE" ]; then
         HEALTH_OK=true
@@ -410,8 +419,8 @@ else
         echo "$HEALTH_RESPONSE"
     fi
     echo ""
-    echo "Check logs: ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-api -n 50'"
-    echo "Check service: ssh ansible@${SERVER_HOST} 'systemctl status theraprac-api'"
+    echo "Check logs: ssh ${SSH_USER}@${SERVER_HOST} 'journalctl -u theraprac-api -n 50'"
+    echo "Check service: ssh ${SSH_USER}@${SERVER_HOST} 'systemctl status theraprac-api'"
 fi
 
 # =============================================================================
@@ -432,9 +441,9 @@ echo ""
   echo -e "    curl https://${API_DOMAIN}/health"
 echo ""
 echo -e "  ${BLUE}View logs:${NC}"
-echo -e "    ssh ansible@${SERVER_HOST} 'journalctl -u theraprac-api -f'"
+echo -e "    ssh ${SSH_USER:-ansible}@${SERVER_HOST} 'journalctl -u theraprac-api -f'"
 echo ""
 echo -e "  ${BLUE}Service status:${NC}"
-echo -e "    ssh ansible@${SERVER_HOST} 'systemctl status theraprac-api'"
+echo -e "    ssh ${SSH_USER:-ansible}@${SERVER_HOST} 'systemctl status theraprac-api'"
 echo ""
 
