@@ -1,0 +1,10 @@
+---
+# =============================================================================
+# Journald Configuration Handlers
+# =============================================================================
+
+- name: restart systemd-journald
+  systemd:
+    name: systemd-journald
+    state: restarted
+

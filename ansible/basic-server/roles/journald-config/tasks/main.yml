@@ -1,0 +1,40 @@
+---
+# =============================================================================
+# Journald Configuration for Log Retention
+# =============================================================================
+# Configures systemd journald to limit disk usage and prevent log files
+# from growing unbounded on the server.
+
+- name: Create journald config directory
+  file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: '0755'
+
+- name: Configure journald retention
+  copy:
+    content: |
+      [Journal]
+      # Maximum disk space for journal logs (500MB)
+      SystemMaxUse=500M
+      
+      # Maximum disk space for journal logs per user (100MB)
+      SystemMaxFileSize=100M
+      
+      # Keep only the most recent logs (24 hours for dev/test, 7 days for prod)
+      # This is set to 1 day - adjust per environment if needed
+      MaxRetentionSec=1day
+      
+      # Automatically rotate logs when size limit is reached
+      MaxFileSec=1day
+      
+      # Compress old logs to save space
+      Compress=yes
+    dest: /etc/systemd/journald.conf.d/theraprac-retention.conf
+    mode: '0644'
+  notify: restart systemd-journald
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: true
+

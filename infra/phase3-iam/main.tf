@@ -56,8 +56,10 @@ locals {
   # Note: API secrets use /theraprac/api/{env}/secrets pattern (separate from infra secrets)
   secrets_arn_pattern     = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${var.project_name}/${var.environment}/*"
   api_secrets_arn_pattern = "arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${var.project_name}/api/*"
-  log_group_arn_pattern   = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/${var.project_name}/${var.environment}/*"
-  log_stream_arn_pattern  = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/${var.project_name}/${var.environment}/*:log-stream:*"
+  # Log groups are created for dev, test, and prod (not just nonprod/prod)
+  # Allow access to all app environments: dev, test, prod
+  log_group_arn_pattern   = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/${var.project_name}/*"
+  log_stream_arn_pattern  = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/${var.project_name}/*:log-stream:*"
 }
 
 # =============================================================================
@@ -148,7 +150,7 @@ resource "aws_iam_policy" "secrets_readonly" {
 # =============================================================================
 # Managed Policy: Observability Write (CloudWatch Logs + X-Ray)
 # =============================================================================
-# CloudWatch Logs scoped to /theraprac/nonprod/* log groups
+# CloudWatch Logs scoped to /theraprac/* log groups (dev, test, prod)
 # X-Ray uses * resources (standard practice for trace data)
 
 data "aws_iam_policy_document" "observability_write" {
@@ -392,9 +394,9 @@ data "aws_iam_policy_document" "api_ses" {
       "ses:SendEmail",
       "ses:SendRawEmail",
     ]
-    resources = [
-      "arn:aws:ses:${var.aws_region}:${local.account_id}:identity/theraprac.com"
-    ]
+    # Use * for resources to allow configuration sets and other SES features
+    # The identity restriction is enforced at the SES level (verified sender)
+    resources = ["*"]
   }
 }
 

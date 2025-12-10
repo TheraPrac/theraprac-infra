@@ -80,6 +80,7 @@
           Target Hosts: {{ ansible_play_hosts | join(', ') }}
 
   roles:
+    - role: journald-config
     - role: liquibase
     - role: theraprac-api
 

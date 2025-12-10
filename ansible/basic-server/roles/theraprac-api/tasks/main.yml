@@ -393,6 +393,23 @@
 # Configuration
 # =============================================================================
 
+- name: Set CloudWatch log group name
+  set_fact:
+    cloudwatch_log_group: "/theraprac/{{ target_env }}/api"
+
+- name: Ensure CloudWatch log group SSM parameter exists
+  ansible.builtin.command:
+    cmd: >
+      aws ssm put-parameter
+      --name /theraprac/api/{{ target_env }}/cloudwatch-log-group
+      --value "{{ cloudwatch_log_group }}"
+      --type String
+      --overwrite
+      --region {{ aws_region }}
+  register: ssm_cloudwatch_result
+  changed_when: "'ParameterVersion' in ssm_cloudwatch_result.stdout"
+  failed_when: false
+
 - name: Create environment file
   template:
     src: theraprac-api.env.j2
