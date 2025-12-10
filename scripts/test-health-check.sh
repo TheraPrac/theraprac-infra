@@ -27,15 +27,23 @@ fi
 
 SERVER_HOST="$1"
 SSH_USER="${2:-ansible}"
+ANSIBLE_SSH_KEY="${ANSIBLE_SSH_KEY:-$HOME/.ssh/id_ed25519_ansible_1}"
 
 # Try to detect which user works
 if [ "$SSH_USER" = "ansible" ]; then
-    if ! ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" "echo test" >/dev/null 2>&1; then
+    if ! ssh -i "$ANSIBLE_SSH_KEY" -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" "echo test" >/dev/null 2>&1; then
         if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o BatchMode=yes "jfinlinson@${SERVER_HOST}" "echo test" >/dev/null 2>&1; then
             SSH_USER="jfinlinson"
             echo -e "${YELLOW}Note: Using jfinlinson user (ansible not available)${NC}"
         fi
     fi
+fi
+
+# Set SSH key option for ansible user
+if [ "$SSH_USER" = "ansible" ]; then
+    SSH_KEY_OPT="-i $ANSIBLE_SSH_KEY"
+else
+    SSH_KEY_OPT=""
 fi
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
@@ -47,7 +55,7 @@ echo ""
 
 # Test 1: Check SSH connectivity
 echo -e "${YELLOW}[1/5] Testing SSH connectivity as ${SSH_USER}...${NC}"
-if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" "echo 'SSH OK'" >/dev/null 2>&1; then
+if ssh $SSH_KEY_OPT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" "echo 'SSH OK'" >/dev/null 2>&1; then
     echo -e "${GREEN}✓ SSH connection successful${NC}"
 else
     echo -e "${RED}✗ SSH connection failed${NC}"
@@ -58,7 +66,7 @@ echo ""
 
 # Test 2: Check service status
 echo -e "${YELLOW}[2/5] Checking service status...${NC}"
-SERVICE_STATUS=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
+SERVICE_STATUS=$(ssh $SSH_KEY_OPT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
     "systemctl is-active theraprac-api 2>&1" || echo "inactive")
 if [ "$SERVICE_STATUS" = "active" ]; then
     echo -e "${GREEN}✓ Service is active${NC}"
@@ -78,7 +86,7 @@ echo ""
 
 # Test 3: Check if port is listening
 echo -e "${YELLOW}[3/5] Checking if port 8080 is listening...${NC}"
-if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
+if ssh $SSH_KEY_OPT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
     "netstat -tln 2>/dev/null | grep -q ':8080 ' || ss -tln 2>/dev/null | grep -q ':8080 '" 2>/dev/null; then
     echo -e "${GREEN}✓ Port 8080 is listening${NC}"
 else
@@ -88,7 +96,7 @@ echo ""
 
 # Test 4: Try basic HTTP connection
 echo -e "${YELLOW}[4/5] Testing HTTP connection to localhost:8080...${NC}"
-HTTP_TEST=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
+HTTP_TEST=$(ssh $SSH_KEY_OPT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
     "timeout 2 curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health 2>&1" || echo "failed")
 if [ "$HTTP_TEST" = "200" ] || [ "$HTTP_TEST" = "503" ]; then
     echo -e "${GREEN}✓ HTTP connection successful (status: ${HTTP_TEST})${NC}"
@@ -109,7 +117,7 @@ echo ""
 HEALTH_OK=false
 HEALTH_RESPONSE=""
 for i in {1..30}; do
-    HEALTH_RESPONSE=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
+    HEALTH_RESPONSE=$(ssh $SSH_KEY_OPT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
         "curl -sf http://localhost:8080/health 2>&1" || echo "")
     
     if [ $? -eq 0 ] && [ -n "$HEALTH_RESPONSE" ] && echo "$HEALTH_RESPONSE" | grep -q '"status"'; then

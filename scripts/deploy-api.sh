@@ -318,7 +318,7 @@ echo -e "${GREEN}✓ Host keys cleaned up${NC}"
 
 # Check Ziti connectivity (warning only, not fatal)
 echo -e "${YELLOW}Checking Ziti connectivity to ${SERVER_HOST}...${NC}"
-if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "ansible@${SERVER_HOST}" exit 0 2>/dev/null; then
+if ssh -i "$ANSIBLE_SSH_KEY" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "ansible@${SERVER_HOST}" exit 0 2>/dev/null; then
     echo -e "${GREEN}✓ Ziti connection available${NC}"
 else
     echo -e "${YELLOW}Warning: Cannot connect to server via Ziti${NC}"
@@ -356,11 +356,20 @@ echo -e "${YELLOW}Checking service status...${NC}"
 
 # Auto-detect which SSH user works
 SSH_USER="ansible"
-if ! ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" "echo test" >/dev/null 2>&1; then
+ANSIBLE_SSH_KEY="${ANSIBLE_SSH_KEY:-$HOME/.ssh/id_ed25519_ansible_1}"
+
+if ! ssh -i "$ANSIBLE_SSH_KEY" -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o BatchMode=yes "ansible@${SERVER_HOST}" "echo test" >/dev/null 2>&1; then
     if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o BatchMode=yes "jfinlinson@${SERVER_HOST}" "echo test" >/dev/null 2>&1; then
         SSH_USER="jfinlinson"
         echo -e "${YELLOW}Note: Using jfinlinson user (ansible not available)${NC}"
     fi
+fi
+
+# Set SSH key option for ansible user
+if [ "$SSH_USER" = "ansible" ]; then
+    SSH_KEY_OPT="-i $ANSIBLE_SSH_KEY"
+else
+    SSH_KEY_OPT=""
 fi
 
 # Give the service a moment to start
@@ -369,7 +378,7 @@ sleep 5
 # First, check if the service is running
 SERVICE_ACTIVE=false
 for i in {1..10}; do
-    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
+    if ssh $SSH_KEY_OPT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
         "systemctl is-active --quiet theraprac-api" 2>/dev/null; then
         SERVICE_ACTIVE=true
         break
@@ -382,7 +391,7 @@ echo ""
 if [ "$SERVICE_ACTIVE" != "true" ]; then
     echo -e "${RED}✗ Service is not active${NC}"
     echo "Checking service status..."
-    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
+    ssh $SSH_KEY_OPT -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${SERVER_HOST}" \
         "systemctl status theraprac-api --no-pager -n 20" 2>&1 || true
     echo ""
     echo "Check logs: ssh ${SSH_USER}@${SERVER_HOST} 'journalctl -u theraprac-api -n 50'"
