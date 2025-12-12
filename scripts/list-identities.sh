@@ -35,3 +35,4 @@ ziti edge list identities --output-json 2>/dev/null | jq -r '.data[] | "\(.name)
 done
 
 
+

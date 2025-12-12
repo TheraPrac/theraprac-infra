@@ -230,3 +230,4 @@ echo "  2. Check logs: aws logs tail ${API_LOG_GROUP} --follow --region ${AWS_RE
 echo "  3. View in console: https://console.aws.amazon.com/cloudwatch/home?region=${AWS_REGION}#logsV2:log-groups/log-group/${API_LOG_GROUP//\//%2F}"
 
 
+
