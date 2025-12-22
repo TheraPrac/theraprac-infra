@@ -152,3 +152,5 @@ echo "   $SCRIPT_DIR/verify-deployment-logs.sh ${ENVIRONMENT}"
 
 
 
+
+
