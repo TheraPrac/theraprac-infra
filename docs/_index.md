@@ -8,12 +8,12 @@
 
 | Level | Meaning |
 |-------|---------|
-| **CANONICAL** | Source of truth. All operations must follow these documents. |
-| **INFORMATIONAL** | Reference guides. Helpful but verify against canonical sources. |
+| **AUTHORITATIVE** | Source of truth. All operations must follow these documents. |
+| **SUPPORTING** | Reference guides. Helpful but verify against authoritative sources. |
 
 ---
 
-## CANONICAL Documents
+## AUTHORITATIVE Documents
 
 | Document | Scope |
 |----------|-------|
@@ -24,7 +24,7 @@
 
 ---
 
-## INFORMATIONAL Documents
+## SUPPORTING Documents
 
 | Document | Purpose |
 |----------|---------|
@@ -37,7 +37,7 @@
 
 ---
 
-## When Documents Conflict
+## Authority Collision Resolution
 
 1. **DEPLOYMENT_WORKFLOW.md wins** for deployment procedures
 2. **ZITI_RESOURCE_MANAGEMENT.md wins** for Ziti operations
