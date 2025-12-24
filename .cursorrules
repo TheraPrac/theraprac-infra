@@ -20,4 +20,5 @@
 - **Do not recommend `--no-verify`** — pre-commit hooks are intentional safety nets
 - **Treat hook failures as blocking** — commits must succeed through normal hook execution
 - **Fix hook failures, do not bypass them** — if a hook fails, investigate and resolve the underlying issue
+- **Commits require full permissions** — git commit operations must use `required_permissions: ['all']` to execute outside sandbox restrictions
 
